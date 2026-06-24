@@ -131,7 +131,7 @@ namespace ldpc {
                 // this->set_omp_thread_count(this->omp_thread_count);
             }
 
-            ~BpDecoder() = default;
+            virtual ~BpDecoder() = default;
 
             void set_omp_thread_count(int count) {
                 this->omp_thread_count = count;
@@ -189,7 +189,7 @@ namespace ldpc {
 
             }
 
-            std::vector<uint8_t> &bp_decode_parallel(std::vector<uint8_t> &syndrome) {
+            virtual std::vector<uint8_t> &bp_decode_parallel(std::vector<uint8_t> &syndrome) {
 
                 this->converge = 0;
 
@@ -324,7 +324,7 @@ namespace ldpc {
 
             }
 
-            std::vector<uint8_t> &bp_decode_single_scan(std::vector<uint8_t> &syndrome) {
+            virtual std::vector<uint8_t> &bp_decode_single_scan(std::vector<uint8_t> &syndrome) {
 
                 converge = 0;
                 int CONVERGED = 0;
@@ -448,7 +448,7 @@ namespace ldpc {
 
             }
 
-            std::vector<uint8_t> &bp_decode_serial(std::vector<uint8_t> &syndrome) {
+            virtual std::vector<uint8_t> &bp_decode_serial(std::vector<uint8_t> &syndrome) {
                 int check_index = 0;
                 this->converge = false;
                 // initialise BP
@@ -544,7 +544,7 @@ namespace ldpc {
                 return this->decoding;
             }
 
-            std::vector<uint8_t> &
+            virtual std::vector<uint8_t> &
             soft_info_decode_serial(std::vector<double> &soft_info_syndrome, double cutoff, double sigma) {
                 // compute the syndrome log-likelihoods and initialize hard syndrome
                 std::vector<uint8_t> syndrome;
