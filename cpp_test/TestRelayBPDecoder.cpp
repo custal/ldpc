@@ -1,20 +1,6 @@
 // TestRelayBPDecoder.cpp
 //
 // Tests for RelayBpDecoder (relay_bp.hpp).
-//
-// These tests are written for the CORRECTED version of relay_bp.hpp, with all fixes from
-// the code review applied. Specifically they assume:
-//   1. The 'unit8_t' typo in best_decoding has been fixed to 'uint8_t'.
-//   2. 'initialise_log_domain_bp(int leg) override' has been renamed to
-//      'initialise_log_domain_bp_relay(int leg)' and the 'override' specifier removed.
-//   3. 'this->memory_strengths[i]' in bp_decode_parallel has been fixed to
-//      'memory_strengths[i]' (the local variable).
-//   4. The post-std::move size checks in the constructor body use 'this->...' instead of
-//      the moved-from parameters.
-//   5. convergence_per_leg, decoding_per_leg, etc. are reset at the start of each
-//      bp_decode_parallel call, so state does not leak between decode() calls.
-//
-// Tests that specifically verify a fix from the code review are marked with [FIXED BUG].
 
 #include <gtest/gtest.h>
 #include "relay_bp.hpp"
@@ -283,7 +269,7 @@ TEST(RelayBpDecoder, ConvergenceAndIterationsTrackedPerLeg) {
 }
 
 TEST(RelayBpDecoder, BestDecodingMatchesConvergedLeg) {
-    // When only one leg converges, best_decoding should equal that leg's decoding.
+    // When only one leg converges, returned decoding should equal that leg's decoding.
     int n = 5;
     auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
     auto decoder = make_relay_decoder(pcm, n, 1, 1);
@@ -292,8 +278,8 @@ TEST(RelayBpDecoder, BestDecodingMatchesConvergedLeg) {
     auto result = decoder.decode(syndrome);
 
     EXPECT_TRUE(decoder.convergence_per_leg[0]);
-    ASSERT_EQ(decoder.decoding_per_leg[0], decoder.best_decoding);
-    ASSERT_EQ(result, decoder.best_decoding);
+    ASSERT_EQ(decoder.decoding_per_leg[0], decoder.decoding);
+    ASSERT_EQ(result, decoder.decoding);
 }
 
 TEST(RelayBpDecoder, MaximumSolutionsEarlyExit) {
@@ -332,7 +318,7 @@ TEST(RelayBpDecoder, StateResetBetweenDecodeCalls) {
     ASSERT_TRUE(decoder.convergence_per_leg[0]);
     EXPECT_NE(decoder.iterations_per_leg[0], 0);
     EXPECT_NE(decoder.solution_number, 0);
-    EXPECT_NE(decoder.best_decoding, vector<uint8_t>(pcm.n, 0));
+    EXPECT_NE(decoder.decoding, vector<uint8_t>(pcm.n, 0));
     EXPECT_NE(decoder.decoding_per_leg[0], vector<uint8_t>(pcm.n, 0));
     EXPECT_NE(decoder.log_prob_ratios_per_leg[0], vector<double>(pcm.n, 0));
 
@@ -347,7 +333,7 @@ TEST(RelayBpDecoder, StateResetBetweenDecodeCalls) {
     EXPECT_FALSE(decoder.convergence_per_leg[0]);
     EXPECT_EQ(decoder.iterations_per_leg[0], 0);
     EXPECT_EQ(decoder.solution_number, 0);
-    EXPECT_EQ(decoder.best_decoding, vector<uint8_t>(pcm.n, 0));
+    EXPECT_EQ(decoder.decoding, vector<uint8_t>(pcm.n, 0));
     EXPECT_EQ(decoder.decoding_per_leg[0], vector<uint8_t>(pcm.n, 0));
     EXPECT_EQ(decoder.log_prob_ratios_per_leg[0], vector<double>(pcm.n, 0));
 }

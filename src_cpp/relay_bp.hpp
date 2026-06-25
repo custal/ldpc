@@ -40,7 +40,6 @@ namespace ldpc::relay {
         std::vector<int> iterations_per_leg;
         std::vector<bool> convergence_per_leg;
         int solution_number;
-        std::vector<uint8_t> best_decoding;
 
         RelayBpDecoder(
                 BpSparse &parity_check_matrix,
@@ -77,7 +76,6 @@ namespace ldpc::relay {
             this->iterations_per_leg.resize(maximum_legs);
             this->convergence_per_leg.resize(maximum_legs);
             this->solution_number = 0;
-            this->best_decoding.resize(bit_count);
             this->decoding_per_leg.resize(maximum_legs);
             this->log_prob_ratios_per_leg.resize(maximum_legs);
 
@@ -136,7 +134,6 @@ namespace ldpc::relay {
             std::fill(this->iterations_per_leg.begin(), this->iterations_per_leg.end(), 0);
             std::fill(this->convergence_per_leg.begin(), this->convergence_per_leg.end(), false);
             this->solution_number = 0;
-            std::fill(this->best_decoding.begin(), this->best_decoding.end(), 0);
             for (int leg = 0; leg < maximum_legs; leg++) {
                 std::fill(this->decoding_per_leg[leg].begin(), this->decoding_per_leg[leg].end(), 0);
                 std::fill(this->log_prob_ratios_per_leg[leg].begin(), this->log_prob_ratios_per_leg[leg].end(), 0);
@@ -290,7 +287,7 @@ namespace ldpc::relay {
             }
             //If no solutions found return the best effort (final) decoding
             if (this->solution_number == 0) {
-                return this->decoding_per_leg[this->maximum_legs-1];
+                this->decoding = this->decoding_per_leg[this->maximum_legs-1];
             }
             //Find best decoding (lowest weight) result and return
             double temp = std::numeric_limits<double>::max();
@@ -301,10 +298,10 @@ namespace ldpc::relay {
                 double weight = this->decoding_weight(this->decoding_per_leg[leg]);
                 if (weight < temp) {
                     temp = weight;
-                    this->best_decoding = this->decoding_per_leg[leg];
+                    this->decoding = this->decoding_per_leg[leg];
                 }
             }
-            return this->best_decoding;
+            return this->decoding;
         }
 
         std::vector<uint8_t> &bp_decode_single_scan(std::vector<uint8_t> &syndrome) override  {
