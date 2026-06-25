@@ -21,14 +21,11 @@
 
 namespace ldpc::relay {
 
-    using NULL_INT_VECTOR = ldpc::bp::NULL_INT_VECTOR;
     using BpSparse = ldpc::bp::BpSparse;
     using BpMethod = ldpc::bp::BpMethod;
     using BpSchedule = ldpc::bp::BpSchedule;
     using BpInputType = ldpc::bp::BpInputType;
     using BpDecoder = ldpc::bp::BpDecoder;
-
-    const std::vector<double> NULL_DOUBLE_VECTOR = {};
 
     class RelayBpDecoder : public BpDecoder {
         // TODO properties should be private and only accessible via getters and setters
@@ -45,7 +42,6 @@ namespace ldpc::relay {
         int solution_number;
         std::vector<uint8_t> best_decoding;
 
-
         RelayBpDecoder(
                 BpSparse &parity_check_matrix,
                 std::vector<double> channel_probabilities,
@@ -54,14 +50,14 @@ namespace ldpc::relay {
                 std::vector<int> maximum_iterations_per_leg,
                 std::vector<std::vector<double>> memory_strengths_per_leg,
                 int maximum_iterations = 0, //Redundant for Relay-BP as relevant information is in maximum_iterations_per_leg
-                BpMethod bp_method = PRODUCT_SUM,
-                BpSchedule schedule = PARALLEL,
+                BpMethod bp_method = ldpc::bp::PRODUCT_SUM,
+                BpSchedule schedule = ldpc::bp::PARALLEL,
                 double min_sum_scaling_factor = 0.625,
                 int omp_threads = 1,
-                const std::vector<int> &serial_schedule = NULL_INT_VECTOR,
+                const std::vector<int> &serial_schedule = ldpc::bp::NULL_INT_VECTOR,
                 int random_schedule_seed = 0,
                 bool random_serial_schedule = false,
-                BpInputType bp_input_type = AUTO
+                BpInputType bp_input_type = ldpc::bp::AUTO
                 ) :
                 BpDecoder(
                     parity_check_matrix,
@@ -78,12 +74,18 @@ namespace ldpc::relay {
                         maximum_iterations_per_leg(std::move(maximum_iterations_per_leg)),
                         memory_strengths_per_leg(std::move(memory_strengths_per_leg))
         {
-            this->decoding_per_leg.resize(maximum_legs);
-            this->log_prob_ratios_per_leg.resize(maximum_legs);
             this->iterations_per_leg.resize(maximum_legs);
             this->convergence_per_leg.resize(maximum_legs);
             this->solution_number = 0;
             this->best_decoding.resize(bit_count);
+            this->decoding_per_leg.resize(maximum_legs);
+            this->log_prob_ratios_per_leg.resize(maximum_legs);
+
+            for (int leg = 0; leg < maximum_legs; leg++) {
+                this->decoding_per_leg[leg] = std::vector<uint8_t>(this->bit_count);
+                this->log_prob_ratios_per_leg[leg] = std::vector<double>(this->bit_count);
+            }
+
 
             if (this->memory_strengths_per_leg.size() != this->maximum_legs
                 || this->maximum_iterations_per_leg.size() != this->maximum_legs) {
@@ -103,7 +105,7 @@ namespace ldpc::relay {
 
         ~RelayBpDecoder() = default;
 
-        void initialise_log_domain_bp(int leg) {
+        void initialise_log_domain_bp_relay(int leg) {
             // initialise BP
             for (int i = 0; i < this->bit_count; i++) {
                 if (leg == 0) {
@@ -130,28 +132,32 @@ namespace ldpc::relay {
 
 
         std::vector<uint8_t> &bp_decode_parallel(std::vector<uint8_t> &syndrome) override {
+            //Reset outputs from previous run
+            std::fill(this->iterations_per_leg.begin(), this->iterations_per_leg.end(), 0);
             std::fill(this->convergence_per_leg.begin(), this->convergence_per_leg.end(), false);
             this->solution_number = 0;
+            std::fill(this->best_decoding.begin(), this->best_decoding.end(), 0);
+            for (int leg = 0; leg < maximum_legs; leg++) {
+                std::fill(this->decoding_per_leg[leg].begin(), this->decoding_per_leg[leg].end(), 0);
+                std::fill(this->log_prob_ratios_per_leg[leg].begin(), this->log_prob_ratios_per_leg[leg].end(), 0);
+            }
 
             for (int leg = 0; leg < this->maximum_legs; leg++) {
                 this->iterations = 0;
                 this->converge = 0;
 
-                solution_number = std::count(this->convergence_per_leg.begin(),
-                    this->convergence_per_leg.end(), true);
-
-                if (solution_number == this->maximum_solutions) {
+                if (this->solution_number == this->maximum_solutions) {
                     break;
                 }
 
-                this->initialise_log_domain_bp(leg);
+                this->initialise_log_domain_bp_relay(leg);
                 int maximum_iterations = this->maximum_iterations_per_leg[leg];
                 std::vector<double> memory_strengths = this->memory_strengths_per_leg[leg];
 
                 //main interation loop
                 for (int it = 1; it <= maximum_iterations; it++) {
 
-                    if (this->bp_method == PRODUCT_SUM) {
+                    if (this->bp_method == ldpc::bp::PRODUCT_SUM) {
                         for (int i = 0; i < this->check_count; i++) {
                             this->candidate_syndrome[i] = 0;
 
@@ -170,7 +176,7 @@ namespace ldpc::relay {
                                 temp *= std::tanh(e.bit_to_check_msg / 2);
                             }
                         }
-                    } else if (this->bp_method == MINIMUM_SUM) {
+                    } else if (this->bp_method == ldpc::bp::MINIMUM_SUM) {
 
                         double alpha;
                         if(this->ms_scaling_factor == 0.0) {
@@ -268,6 +274,7 @@ namespace ldpc::relay {
                         this->log_prob_ratios_per_leg[leg] = this->log_prob_ratios;
                         this->iterations_per_leg[leg] = this->iterations;
                         this->convergence_per_leg[leg] = this->converge;
+                        this->solution_number += 1;
                         break;
                     }
 

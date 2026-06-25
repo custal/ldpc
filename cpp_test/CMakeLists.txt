@@ -19,6 +19,7 @@ FetchContent_MakeAvailable(GoogleTest)
 set(TEST_EXECUTABLES
     TestBPDecoder
     TestOsdDecoder
+	TestRelayBPDecoder
     TestSoftInfo
     TestFlipDecoder
     TestGf2Codes
