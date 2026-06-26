@@ -28,7 +28,10 @@ namespace ldpc::relay {
     using BpDecoder = ldpc::bp::BpDecoder;
 
     class RelayBpDecoder : public BpDecoder {
-        // TODO properties should be private and only accessible via getters and setters
+        // TODO This class is effectively a duplicate of BpDecoder but with an altered message passing algorithm which
+        // accepts memory and legs. We should consider refactoring BpDecoder so it accepts memory as an input in order
+        // to implement DMem-BP and then create an independent class which chains these together to make the relay legs.
+        // I don't want to edit the original files however so this is a work around
     public:
         int maximum_legs;
         int maximum_solutions;
