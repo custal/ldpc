@@ -635,8 +635,6 @@ cdef class RelayBpDecoderBase:
         if not len(value) == self.maximum_legs:
             raise Exception("Input error. The `maximum_iterations_per_leg` input parameter must have length equal to the length of 'maximum_legs'.")
         for i in range(self.maximum_legs):
-            if not isinstance(value[i], (int, np.int64, np.int32)) or value[i] < 0:
-                raise ValueError(f"maximum_iterations_per_leg[{i}] is invalid. It must be a non-negative integer.")
             self.bpd.maximum_iterations_per_leg[i] = value[i]
 
     @property
@@ -651,8 +649,8 @@ cdef class RelayBpDecoderBase:
     def memory_strengths_per_leg(self, value: Optional[np.ndarray]) -> None:
         if not isinstance(value, np.ndarray):
             raise Exception(f"'memory_strengths_per_leg' is of type {type(value)} but must be of type 'np.ndarray'")
-        if not len(value) == self.maximum_legs or len(value[0]) == self.n:
-            raise Exception("Input error. The `maximum_iterations_per_leg` input parameter must have length equal to the length of 'maximum_legs'.")
+        if not len(value) == self.maximum_legs or not all([self.n == len(row) for row in value]):
+            raise Exception("Input error. The `memory_strengths_per_leg` input parameter must have length equal to the length of 'maximum_legs'.")
         for i in range(self.maximum_legs):
             for j in range(self.n):
                 if not isinstance(value[i][j], (int, np.int64, np.int32, float, np.float64, np.float32)):
@@ -829,7 +827,7 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
 
     @property
     def convergence_per_leg(self) -> np.ndarray:
-        out = np.zeros(self.maximum_legs).astype(np.bool)
+        out = np.zeros(self.maximum_legs).astype(np.bool_)
         for i in range(self.maximum_legs):
             out[i] = self.bpd.convergence_per_leg[i]
         return out
