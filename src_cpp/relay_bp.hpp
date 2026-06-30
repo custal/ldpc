@@ -54,7 +54,7 @@ namespace ldpc::relay {
                 int maximum_iterations = 0, //Redundant for Relay-BP as relevant information is in maximum_iterations_per_leg
                 BpMethod bp_method = ldpc::bp::PRODUCT_SUM,
                 BpSchedule schedule = ldpc::bp::PARALLEL,
-                double min_sum_scaling_factor = 0.625,
+                double min_sum_scaling_factor = 1.0,
                 int omp_threads = 1,
                 const std::vector<int> &serial_schedule = ldpc::bp::NULL_INT_VECTOR,
                 int random_schedule_seed = 0,
@@ -270,11 +270,6 @@ namespace ldpc::relay {
                     this->iterations = it;
 
                     if (this->converge) {
-                        this->decoding_per_leg[leg] = this->decoding;
-                        this->log_prob_ratios_per_leg[leg] = this->log_prob_ratios;
-                        this->iterations_per_leg[leg] = this->iterations;
-                        this->convergence_per_leg[leg] = this->converge;
-                        this->solution_number += 1;
                         break;
                     }
 
@@ -287,6 +282,12 @@ namespace ldpc::relay {
                         }
                     }
                 }
+
+                this->decoding_per_leg[leg] = this->decoding;
+                this->log_prob_ratios_per_leg[leg] = this->log_prob_ratios;
+                this->iterations_per_leg[leg] = this->iterations;
+                this->convergence_per_leg[leg] = this->converge;
+                this->solution_number += 1;
             }
             //If no solutions found return the best effort (final) decoding
             if (this->solution_number == 0) {
