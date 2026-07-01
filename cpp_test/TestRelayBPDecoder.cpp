@@ -59,7 +59,7 @@ TEST(RelayBpDecoder, InitializationTest) {
     EXPECT_EQ(pcm.m, decoder.check_count);
     EXPECT_EQ(pcm.n, decoder.bit_count);
     EXPECT_EQ(channel_probabilities, decoder.channel_probabilities);
-    EXPECT_EQ(0.625, decoder.ms_scaling_factor);
+    EXPECT_EQ(1.0, decoder.ms_scaling_factor);
     EXPECT_EQ(ldpc::bp::PRODUCT_SUM, decoder.bp_method);
     EXPECT_EQ(ldpc::bp::PARALLEL, decoder.schedule);
     EXPECT_EQ(1, decoder.omp_thread_count);
@@ -335,7 +335,13 @@ TEST(RelayBpDecoder, StateResetBetweenDecodeCalls) {
     EXPECT_EQ(decoder.solution_number, 0);
     EXPECT_EQ(decoder.decoding, vector<uint8_t>(pcm.n, 0));
     EXPECT_EQ(decoder.decoding_per_leg[0], vector<uint8_t>(pcm.n, 0));
-    EXPECT_EQ(decoder.log_prob_ratios_per_leg[0], vector<double>(pcm.n, 0));
+
+    auto initial_log_prob_ratios = vector<double>(pcm.n, 0);
+    for (int i = 0; i < pcm.n; i++) {
+        initial_log_prob_ratios[i] = std::log(
+            (1 - channel_probabilities[i]) / channel_probabilities[i]);
+    }
+    EXPECT_EQ(decoder.log_prob_ratios_per_leg[0], initial_log_prob_ratios);
 }
 
 TEST(RelayBpDecoder, MultipleLegsWithMemory_ConvergesCorrectly) {
@@ -396,6 +402,108 @@ TEST(RelayBpDecoder, SoftInfoDecodeSerialThrowsNotImplemented) {
     auto soft_syndrome = vector<double>(pcm.m, 0.5);
 
     EXPECT_THROW(decoder.soft_info_decode_serial(soft_syndrome, 1.0, 1.0), std::logic_error);
+}
+
+
+TEST(RelayBpDecoder, NonConvergingLegsSaveResults) {
+    //There is an inconsistency between the log-likelihoods for negative initial memories compared to ibms rust implementation.
+    //This was due to a bug where legs which didn't converge didn't have their results saved which I have now fixed.
+    //This test makes sure the bug is no longer present
+    double gamma0 = -1;
+    int pre_iter = 80;
+    int set_max_iter = 60;
+    int maximum_solutions = 2;
+    int n = 3;
+    int maximum_legs = 2;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+    auto channel_probabilities = vector<double>(n, 0.003);
+    auto max_iters = vector<int>{pre_iter, set_max_iter};
+    // Build per-leg memory vectors: leg 0 always has zero memory
+    auto mem_strengths = vector<vector<double>>{{gamma0,gamma0,gamma0}, {-0.345025519,  0.190321013,  0.575298233}};
+
+    auto decoder = RelayBpDecoder(pcm, channel_probabilities, maximum_legs, maximum_solutions,
+                          max_iters, mem_strengths, false, 0,
+                          ldpc::bp::MINIMUM_SUM, ldpc::bp::PARALLEL, 1);
+
+    auto syndrome = vector<uint8_t>{1,1};
+
+    decoder.decode(syndrome);
+
+    //Expected outcomes
+    EXPECT_NE(decoder.iterations_per_leg[0], 0);
+    EXPECT_NE(decoder.log_prob_ratios_per_leg[0], std::vector<double>(n, 0.0));
+}
+
+TEST(RelayBpDecoder, MultiLegExampleExpectedResults) {
+    //Check I find the expected results for a multileg example
+    double gamma0 = -1;
+    int pre_iter = 80;
+    int set_max_iter = 60;
+    int maximum_solutions = 2;
+    int n = 3;
+    int maximum_legs = 2;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+    auto channel_probabilities = vector<double>(n, 0.003);
+    auto max_iters = vector<int>{pre_iter, set_max_iter};
+    // Build per-leg memory vectors: leg 0 always has zero memory
+    auto mem_strengths = vector<vector<double>>{{gamma0,gamma0,gamma0}, {-0.345025519,  0.190321013,  0.575298233}};
+
+    auto decoder = RelayBpDecoder(pcm, channel_probabilities, maximum_legs, maximum_solutions,
+                          max_iters, mem_strengths, false, 0,
+                          ldpc::bp::MINIMUM_SUM, ldpc::bp::PARALLEL, 1);
+
+    auto syndrome = vector<uint8_t>{1,1};
+
+    decoder.decode(syndrome);
+
+    //Expected outcomes
+    auto convergence_per_leg = vector<bool>{false, true};
+    auto decoding_per_leg = vector<vector<uint8_t>>{{0,0,0}, {0,1,0}};
+    auto iterations_per_leg = vector<int>{80, 2};
+    auto log_prob_ratios_per_leg = vector<vector<double>>{{3.6418351862591384e+22, 4.2792000397402358e+22, 3.6418351862591384e+22},
+                                                       {4.4809035473942366e+22,-4.3907058564338073e+22,5.4265411126195346e+21}};
+    auto decoding = vector<uint8_t>{0,1,0};
+    EXPECT_EQ(decoder.convergence_per_leg, convergence_per_leg);
+    EXPECT_EQ(decoder.decoding_per_leg, decoding_per_leg);
+    EXPECT_EQ(decoder.iterations_per_leg, iterations_per_leg);
+    EXPECT_EQ(decoder.log_prob_ratios_per_leg, log_prob_ratios_per_leg);
+    EXPECT_EQ(decoder.decoding, decoding);
+}
+
+TEST(RelayBpDecoder, MultiLegExampleExpectedResultsIBM) {
+    //Check I find the expected results for a multileg example using the IBM implementation of the code
+    double gamma0 = -1;
+    int pre_iter = 80;
+    int set_max_iter = 60;
+    int maximum_solutions = 2;
+    int n = 3;
+    int maximum_legs = 2;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+    auto channel_probabilities = vector<double>(n, 0.003);
+    auto max_iters = vector<int>{pre_iter, set_max_iter};
+    // Build per-leg memory vectors: leg 0 always has zero memory
+    auto mem_strengths = vector<vector<double>>{{gamma0,gamma0,gamma0}, {-0.345025519,  0.190321013,  0.575298233}};
+
+    auto decoder = RelayBpDecoder(pcm, channel_probabilities, maximum_legs, maximum_solutions,
+                          max_iters, mem_strengths, true, 0,
+                          ldpc::bp::MINIMUM_SUM, ldpc::bp::PARALLEL, 1);
+
+    auto syndrome = vector<uint8_t>{1,1};
+
+    decoder.decode(syndrome);
+
+    //Expected outcomes
+    auto convergence_per_leg = vector<bool>{false, true};
+    auto decoding_per_leg = vector<vector<uint8_t>>{{0,0,0}, {1,0,1}};
+    auto iterations_per_leg = vector<int>{80, 6};
+    auto log_prob_ratios_per_leg = vector<vector<double>>{{3.6418351862591384e+22, 4.2792000397402358e+22, 3.6418351862591384e+22},
+                                                       {-6.7064626093939113e+21,5.2349039409693396e+21,-3.5295647500585984e+21}};
+    auto decoding = vector<uint8_t>{1,0,1}; //Note the IBM version converges to the wrong solution
+    EXPECT_EQ(decoder.convergence_per_leg, convergence_per_leg);
+    EXPECT_EQ(decoder.decoding_per_leg, decoding_per_leg);
+    EXPECT_EQ(decoder.iterations_per_leg, iterations_per_leg);
+    EXPECT_EQ(decoder.log_prob_ratios_per_leg, log_prob_ratios_per_leg);
+    EXPECT_EQ(decoder.decoding, decoding);
 }
 
 int main(int argc, char **argv) {

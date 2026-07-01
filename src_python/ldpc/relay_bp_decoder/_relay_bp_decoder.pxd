@@ -17,6 +17,7 @@ cdef extern from "relay_bp.hpp" namespace "ldpc::relay":
                 int maximum_solutions,
                 vector[int] maximum_iterations_per_leg,
                 vector[vector[double]] memory_strengths_per_leg,
+                bool ibm_implementation,
                 int maximum_iterations,
                 BpMethod bp_method,
                 BpSchedule schedule,
@@ -30,6 +31,7 @@ cdef extern from "relay_bp.hpp" namespace "ldpc::relay":
             int maximum_solutions
             vector[int] maximum_iterations_per_leg
             vector[vector[double]] memory_strengths_per_leg
+            bool ibm_implementation
 
             vector[vector[uint8_t]] decoding_per_leg
             vector[vector[double]] log_prob_ratios_per_leg

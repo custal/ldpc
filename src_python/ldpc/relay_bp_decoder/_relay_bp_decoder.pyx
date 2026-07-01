@@ -114,6 +114,7 @@ cdef class RelayBpDecoderBase:
         maximum_solutions=kwargs.get("maximum_solutions", None)
         maximum_iterations_per_leg=kwargs.get("maximum_iterations_per_leg", None)
         memory_strengths_per_leg=kwargs.get("memory_strengths_per_leg", None)
+        ibm_implementation=kwargs.get("ibm_implementation", False)
 
         cdef int i, j, nonzero_count
         self.MEMORY_ALLOCATED=False
@@ -145,7 +146,8 @@ cdef class RelayBpDecoderBase:
             self._memory_strengths_per_leg[i].resize(self.n)
 
         ## initialise the decoder with default values
-        self.bpd = new RelayBpDecoderCpp(self.pcm[0],self._error_channel,l,0,self._maximum_iterations_per_leg,self._memory_strengths_per_leg,0,PRODUCT_SUM,PARALLEL,1.0,1,self._serial_schedule_order,0,False,SYNDROME)
+        self.bpd = new RelayBpDecoderCpp(self.pcm[0],self._error_channel,l,0,self._maximum_iterations_per_leg,
+                self._memory_strengths_per_leg,False,0,PRODUCT_SUM,PARALLEL,1.0,1,self._serial_schedule_order,0,False,SYNDROME)
 
         ## set the decoder parameters
         self.bp_method = bp_method
@@ -180,6 +182,7 @@ cdef class RelayBpDecoderBase:
         self.maximum_solutions = maximum_solutions
         self.maximum_iterations_per_leg = maximum_iterations_per_leg
         self.memory_strengths_per_leg = memory_strengths_per_leg
+        self.ibm_implementation = ibm_implementation
 
         self.MEMORY_ALLOCATED=True
 
@@ -657,6 +660,14 @@ cdef class RelayBpDecoderBase:
                     raise ValueError(f"memory_strengths_per_leg[{i},{j}] is invalid. It must be an integer or float.")
                 self.bpd.memory_strengths_per_leg[i][j] = value[i][j]
 
+    @property
+    def ibm_implementation(self) -> bool:
+        return self.bpd.ibm_implementation
+
+    @ibm_implementation.setter
+    def ibm_implementation(self, value: bool) -> None:
+        self.bpd.ibm_implementation = value
+
 
 cdef class RelayBpDecoder(RelayBpDecoderBase):
     """
@@ -711,7 +722,7 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
                  maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[np.ndarray] = None,
-                 memory_strengths_per_leg: Optional[np.array] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
+                 memory_strengths_per_leg: Optional[np.array] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False, **kwargs):
 
@@ -727,7 +738,7 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
               error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
               maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[np.ndarray] = None,
-              memory_strengths_per_leg: Optional[np.array] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
+              memory_strengths_per_leg: Optional[np.array] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
               ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
               random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False, **kwargs):
 

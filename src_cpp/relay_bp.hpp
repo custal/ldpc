@@ -44,6 +44,10 @@ namespace ldpc::relay {
         std::vector<bool> convergence_per_leg;
         int solution_number;
 
+        //I think ibm have implemented their version wrong. If this is True the IBM version
+        //will be run else what I think is the correct implementation will run
+        bool ibm_implementation;
+
         RelayBpDecoder(
                 BpSparse &parity_check_matrix,
                 std::vector<double> channel_probabilities,
@@ -51,6 +55,7 @@ namespace ldpc::relay {
                 int maximum_solutions,
                 std::vector<int> maximum_iterations_per_leg,
                 std::vector<std::vector<double>> memory_strengths_per_leg,
+                bool ibm_implementation = false,
                 int maximum_iterations = 0, //Redundant for Relay-BP as relevant information is in maximum_iterations_per_leg
                 BpMethod bp_method = ldpc::bp::PRODUCT_SUM,
                 BpSchedule schedule = ldpc::bp::PARALLEL,
@@ -74,7 +79,8 @@ namespace ldpc::relay {
                       random_serial_schedule,
                       bp_input_type), maximum_legs(maximum_legs), maximum_solutions(maximum_solutions),
                         maximum_iterations_per_leg(std::move(maximum_iterations_per_leg)),
-                        memory_strengths_per_leg(std::move(memory_strengths_per_leg))
+                        memory_strengths_per_leg(std::move(memory_strengths_per_leg)),
+                        ibm_implementation(ibm_implementation)
         {
             this->iterations_per_leg.resize(maximum_legs);
             this->convergence_per_leg.resize(maximum_legs);
@@ -112,7 +118,9 @@ namespace ldpc::relay {
                 if (leg == 0) {
                     this->initial_log_prob_ratios[i] = std::log(
                         (1 - this->channel_probabilities[i]) / this->channel_probabilities[i]);
-                } else { //Carry over log_prob_ratios from previous leg
+                    this->log_prob_ratios[i] = this->initial_log_prob_ratios[i];
+                }
+                else if (!(this->ibm_implementation)) { //Carry over log_prob_ratios from previous leg
                     this->initial_log_prob_ratios[i] = this->log_prob_ratios[i];
                 }
 
@@ -136,6 +144,8 @@ namespace ldpc::relay {
             //Reset outputs from previous run
             std::fill(this->iterations_per_leg.begin(), this->iterations_per_leg.end(), 0);
             std::fill(this->convergence_per_leg.begin(), this->convergence_per_leg.end(), false);
+            std::fill(this->decoding.begin(), this->decoding.end(), 0);
+            std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
             this->solution_number = 0;
             for (int leg = 0; leg < maximum_legs; leg++) {
                 std::fill(this->decoding_per_leg[leg].begin(), this->decoding_per_leg[leg].end(), 0);
@@ -236,12 +246,8 @@ namespace ldpc::relay {
                     for (int i = 0; i < this->bit_count; i++) {
 
                         double temp; //Implement DMem-BP
-                        if (it  == 1) {
-                            temp = this->initial_log_prob_ratios[i];
-                        } else {
-                            temp = (1 - memory_strengths[i]) * this->initial_log_prob_ratios[i] +
-                                memory_strengths[i] * this->log_prob_ratios[i];
-                        }
+                        temp = (1 - memory_strengths[i]) * this->initial_log_prob_ratios[i] +
+                            memory_strengths[i] * this->log_prob_ratios[i];
                         for (auto &e: this->pcm.iterate_column(i)) {
                             e.bit_to_check_msg = temp;
                             temp += e.check_to_bit_msg;
@@ -270,6 +276,7 @@ namespace ldpc::relay {
                     this->iterations = it;
 
                     if (this->converge) {
+                        this->solution_number += 1;
                         break;
                     }
 
@@ -287,7 +294,6 @@ namespace ldpc::relay {
                 this->log_prob_ratios_per_leg[leg] = this->log_prob_ratios;
                 this->iterations_per_leg[leg] = this->iterations;
                 this->convergence_per_leg[leg] = this->converge;
-                this->solution_number += 1;
             }
             //If no solutions found return the best effort (final) decoding
             if (this->solution_number == 0) {

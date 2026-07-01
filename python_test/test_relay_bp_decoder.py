@@ -16,6 +16,7 @@ DEFAULT_LEGS = 2
 DEFAULT_SOLUTIONS = 1
 DEFAULT_ITERS_PER_LEG = np.array([10, 10])
 DEFAULT_STRENGTHS_PER_LEG = np.ones((2, 3)) * 0.5
+IBM_IMPLEMENTATION = False
 
 
 def make_decoder(pcm=PCM_NP, **kwargs):
@@ -26,6 +27,7 @@ def make_decoder(pcm=PCM_NP, **kwargs):
         maximum_solutions=DEFAULT_SOLUTIONS,
         maximum_iterations_per_leg=DEFAULT_ITERS_PER_LEG.copy(),
         memory_strengths_per_leg=DEFAULT_STRENGTHS_PER_LEG.copy(),
+        ibm_implementation=IBM_IMPLEMENTATION
     )
     defaults.update(kwargs)
     return RelayBpDecoder(pcm, **defaults)
@@ -232,6 +234,14 @@ def test_memory_strengths_per_leg_wrong_shape():
         d = make_decoder()
         d.memory_strengths_per_leg = np.ones((3, 3)) * 0.5  # wrong leg count
 
+
+def test_ibm_implementation_roundtrip():
+    ibm_implementation = True
+    decoder = make_decoder(ibm_implementation=ibm_implementation)
+    assert decoder.ibm_implementation == ibm_implementation
+    new_ibm_implementation = False
+    decoder.ibm_implementation = new_ibm_implementation
+    assert decoder.ibm_implementation == new_ibm_implementation
 
 # ── decoding ────────────────────────────────────────────────────────────────
 
