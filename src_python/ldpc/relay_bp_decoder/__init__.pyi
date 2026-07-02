@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.sparse
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Tuple
 import warnings
 import ldpc.helpers.scipy_helpers
 from ldpc.bp_decoder._bp_decoder import (
@@ -309,13 +309,13 @@ class RelayBpDecoderBase:
     def maximum_iterations_per_leg(self) -> np.ndarray: ...
 
     @maximum_iterations_per_leg.setter
-    def maximum_iterations_per_leg(self, value: Optional[np.ndarray]) -> None: ...
+    def maximum_iterations_per_leg(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None: ...
 
     @property
     def memory_strengths_per_leg(self) -> np.ndarray: ...
 
     @memory_strengths_per_leg.setter
-    def memory_strengths_per_leg(self, value: Optional[np.ndarray]) -> None: ...
+    def memory_strengths_per_leg(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None: ...
 
     @property
     def ibm_implementation(self) -> bool: ...
@@ -376,15 +376,15 @@ class RelayBpDecoder(RelayBpDecoderBase):
 
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
-                 maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[np.ndarray] = None,
-                 memory_strengths_per_leg: Optional[np.array] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
+                 maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None,
+                 memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False, **kwargs): ...
 
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
               error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
-              maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[np.ndarray] = None,
-              memory_strengths_per_leg: Optional[np.array] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
+              maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None,
+              memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
               ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
               random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False, **kwargs): ...
 

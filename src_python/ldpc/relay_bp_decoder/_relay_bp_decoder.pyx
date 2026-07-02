@@ -2,7 +2,7 @@
 # distutils: language = c++
 import numpy as np
 import scipy.sparse
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Tuple
 import warnings
 import ldpc.helpers.scipy_helpers
 from ldpc.bp_decoder._bp_decoder cimport (
@@ -634,11 +634,11 @@ cdef class RelayBpDecoderBase:
         return out
 
     @maximum_iterations_per_leg.setter
-    def maximum_iterations_per_leg(self, value: Optional[np.ndarray]) -> None:
+    def maximum_iterations_per_leg(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None:
         if not len(value) == self.maximum_legs:
             raise Exception("Input error. The `maximum_iterations_per_leg` input parameter must have length equal to the length of 'maximum_legs'.")
-        for i in range(self.maximum_legs):
-            self.bpd.maximum_iterations_per_leg[i] = value[i]
+        value = np.asarray(value, dtype=np.int64)
+        self.bpd.maximum_iterations_per_leg = value
 
     @property
     def memory_strengths_per_leg(self) -> np.ndarray:
@@ -649,16 +649,11 @@ cdef class RelayBpDecoderBase:
         return out
 
     @memory_strengths_per_leg.setter
-    def memory_strengths_per_leg(self, value: Optional[np.ndarray]) -> None:
-        if not isinstance(value, np.ndarray):
-            raise Exception(f"'memory_strengths_per_leg' is of type {type(value)} but must be of type 'np.ndarray'")
+    def memory_strengths_per_leg(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None:
         if not len(value) == self.maximum_legs or not all([self.n == len(row) for row in value]):
-            raise Exception("Input error. The `memory_strengths_per_leg` input parameter must have length equal to the length of 'maximum_legs'.")
-        for i in range(self.maximum_legs):
-            for j in range(self.n):
-                if not isinstance(value[i][j], (int, np.int64, np.int32, float, np.float64, np.float32)):
-                    raise ValueError(f"memory_strengths_per_leg[{i},{j}] is invalid. It must be an integer or float.")
-                self.bpd.memory_strengths_per_leg[i][j] = value[i][j]
+            raise Exception(f"Input error. The `memory_strengths_per_leg` input parameter must have shape {(self.maximum_legs, self.n)} but has shape {(len(value), len(value[0]))}.")
+        value = np.asarray(value, dtype=np.float64)
+        self.bpd.memory_strengths_per_leg = value
 
     @property
     def ibm_implementation(self) -> bool:
@@ -721,8 +716,8 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
 
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
-                 maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[np.ndarray] = None,
-                 memory_strengths_per_leg: Optional[np.array] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
+                 maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None,
+                 memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False, **kwargs):
 
@@ -737,8 +732,8 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
 
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
               error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
-              maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[np.ndarray] = None,
-              memory_strengths_per_leg: Optional[np.array] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
+              maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None,
+              memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
               ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
               random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False, **kwargs):
 
