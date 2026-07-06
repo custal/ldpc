@@ -156,10 +156,6 @@ namespace ldpc::relay {
                 this->iterations = 0;
                 this->converge = 0;
 
-                if (this->solution_number == this->maximum_solutions) {
-                    break;
-                }
-
                 this->initialise_log_domain_bp_relay(leg);
                 int maximum_iterations = this->maximum_iterations_per_leg[leg];
                 std::vector<double> memory_strengths = this->memory_strengths_per_leg[leg];
@@ -206,7 +202,9 @@ namespace ldpc::relay {
                             double temp = std::numeric_limits<double>::max();
 
                             for (auto &e: this->pcm.iterate_row(i)) {
-                                if (e.bit_to_check_msg <= 0) {
+                                //Change from <= to < to be consistent with ibm implementation. This is of no
+                                //consequence but I did this to ensure consistency on a shot by shot basis during debugging
+                                if (e.bit_to_check_msg < 0) {
                                     total_sgn += 1;
                                 }
                                 e.check_to_bit_msg = temp;
@@ -219,7 +217,9 @@ namespace ldpc::relay {
                             temp = std::numeric_limits<double>::max();
                             for (auto &e: this->pcm.reverse_iterate_row(i)) {
                                 sgn = total_sgn;
-                                if (e.bit_to_check_msg <= 0) {
+                                //Change from <= to < to be consistent with ibm implementation. This is of no
+                                //consequence but I did this to ensure consistency on a shot by shot basis during debugging
+                                if (e.bit_to_check_msg < 0) {
                                     sgn += 1;
                                 }
                                 if (temp < e.check_to_bit_msg) {
@@ -294,6 +294,10 @@ namespace ldpc::relay {
                 this->log_prob_ratios_per_leg[leg] = this->log_prob_ratios;
                 this->iterations_per_leg[leg] = this->iterations;
                 this->convergence_per_leg[leg] = this->converge;
+
+                if (this->solution_number == this->maximum_solutions) {
+                    break;
+                }
             }
             //If no solutions found return the best effort (final) decoding
             if (this->solution_number == 0) {
