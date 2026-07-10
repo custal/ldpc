@@ -35,28 +35,43 @@ namespace ldpc::relay {
     public:
         int maximum_legs;
         int maximum_solutions;
-        std::vector<int> maximum_iterations_per_leg;
+
+        // Leg 0 runs for `iterations0` iterations (paired with memory strength gamma0).
+        // Every subsequent leg runs for the inherited `maximum_iterations` iterations
+        // (paired with the randomly-drawn per-leg memory strengths).
+        int iterations0;
+
+        // Memory strengths can either be given explicitly via `memory_strengths_per_leg`
+        // (a (maximum_legs x bit_count) array), or auto-generated on the fly each leg:
+        //   - leg 0 uses a constant memory strength `gamma0` for every bit
+        //   - legs > 0 draw a memory strength per bit uniformly at random from
+        //     [gamma_dist_interval[0], gamma_dist_interval[1]]
+        // If memory_strengths_per_leg is non-empty it always takes precedence over
+        // gamma0/gamma_dist_interval, which are then ignored.
+        double gamma0;
+        std::vector<double> gamma_dist_interval;
         std::vector<std::vector<double>> memory_strengths_per_leg;
+        std::mt19937 memory_rng;
 
-        std::vector<std::vector<uint8_t>> decoding_per_leg;
-        std::vector<std::vector<double>> log_prob_ratios_per_leg;
-        std::vector<int> iterations_per_leg;
-        std::vector<bool> convergence_per_leg;
+        // Only the best decoding (lowest weight, converged) found across all legs is kept,
+        // rather than storing every leg's decoding/log_prob_ratios/iterations/convergence.
+        // The winning result is written into the inherited `decoding` / `log_prob_ratios`
+        // members at the end of bp_decode_parallel.
         int solution_number;
+        int total_iterations; // sum of BP iterations across every leg run
 
-        //I think ibm have implemented their version wrong. If this is True the IBM version
-        //will be run else what I think is the correct implementation will run
-        bool ibm_implementation;
+        int memory_seed;
 
         RelayBpDecoder(
                 BpSparse &parity_check_matrix,
                 std::vector<double> channel_probabilities,
                 int maximum_legs,
                 int maximum_solutions,
-                std::vector<int> maximum_iterations_per_leg,
-                std::vector<std::vector<double>> memory_strengths_per_leg,
-                bool ibm_implementation = false,
-                int maximum_iterations = 0, //Redundant for Relay-BP as relevant information is in maximum_iterations_per_leg
+                int iterations0, //Number of BP iterations run on leg 0 (paired with gamma0)
+                int maximum_iterations, //Number of BP iterations run on every leg after the first (paired with gamma_dist_interval)
+                double gamma0 = 0.0, //Ignored if memory_strengths_per_leg is provided explicitly
+                std::vector<double> gamma_dist_interval = {}, //Ignored if memory_strengths_per_leg is provided explicitly
+                std::vector<std::vector<double>> memory_strengths_per_leg = {}, //Optional explicit (maximum_legs x bit_count) override; if given, takes precedence over gamma0/gamma_dist_interval
                 BpMethod bp_method = ldpc::bp::PRODUCT_SUM,
                 BpSchedule schedule = ldpc::bp::PARALLEL,
                 double min_sum_scaling_factor = 1.0,
@@ -64,7 +79,8 @@ namespace ldpc::relay {
                 const std::vector<int> &serial_schedule = ldpc::bp::NULL_INT_VECTOR,
                 int random_schedule_seed = 0,
                 bool random_serial_schedule = false,
-                BpInputType bp_input_type = ldpc::bp::AUTO
+                BpInputType bp_input_type = ldpc::bp::AUTO,
+                int memory_seed = -1 // seed for the per-leg memory strength RNG; -1 -> seed non-deterministically
                 ) :
                 BpDecoder(
                     parity_check_matrix,
@@ -78,36 +94,72 @@ namespace ldpc::relay {
                       random_schedule_seed,
                       random_serial_schedule,
                       bp_input_type), maximum_legs(maximum_legs), maximum_solutions(maximum_solutions),
-                        maximum_iterations_per_leg(std::move(maximum_iterations_per_leg)),
-                        memory_strengths_per_leg(std::move(memory_strengths_per_leg)),
-                        ibm_implementation(ibm_implementation)
+                        iterations0(iterations0),
+                        gamma0(gamma0),
+                        gamma_dist_interval(std::move(gamma_dist_interval)),
+                        memory_strengths_per_leg(std::move(memory_strengths_per_leg)), memory_seed(memory_seed)
         {
-            this->iterations_per_leg.resize(maximum_legs);
-            this->convergence_per_leg.resize(maximum_legs);
             this->solution_number = 0;
-            this->decoding_per_leg.resize(maximum_legs);
-            this->log_prob_ratios_per_leg.resize(maximum_legs);
+            this->total_iterations = 0;
 
-            for (int leg = 0; leg < maximum_legs; leg++) {
-                this->decoding_per_leg[leg] = std::vector<uint8_t>(this->bit_count);
-                this->log_prob_ratios_per_leg[leg] = std::vector<double>(this->bit_count);
-            }
-
-
-            if (this->memory_strengths_per_leg.size() != this->maximum_legs
-                || this->maximum_iterations_per_leg.size() != this->maximum_legs) {
-                throw std::runtime_error("memory_strengths_per_leg and maximum_iterations_per_leg must be the same size "
-                                         "as maximum_legs");
-            }
-            for (int leg = 0; leg < maximum_legs; leg++) {
-                if (this->memory_strengths_per_leg[leg].size() != this->bit_count) {
-                    throw std::runtime_error("Each memory_strengths_per_leg entry must have length equal to bit_count");
+            if (!this->memory_strengths_per_leg.empty()) {
+                if (this->memory_strengths_per_leg.size() != static_cast<size_t>(this->maximum_legs)) {
+                    throw std::runtime_error("memory_strengths_per_leg must have exactly maximum_legs entries");
                 }
+                for (int leg = 0; leg < this->maximum_legs; leg++) {
+                    if (this->memory_strengths_per_leg[leg].size() != static_cast<size_t>(this->bit_count)) {
+                        throw std::runtime_error("Each memory_strengths_per_leg entry must have length equal to bit_count");
+                    }
+                }
+            } else if (this->gamma_dist_interval.size() != 2) {
+                throw std::runtime_error("Either provide memory_strengths_per_leg explicitly, or provide gamma0 "
+                                         "together with a 2-element gamma_dist_interval so memory strengths can "
+                                         "be auto-generated.");
+            }
+
+            if (this->memory_seed >= 0) {
+                this->memory_rng.seed(static_cast<unsigned int>(this->memory_seed));
+            } else {
+                std::random_device rd;
+                this->memory_rng.seed(rd());
             }
 
             //Initialise OMP thread pool
             // this->omp_thread_count = omp_threads;
             // this->set_omp_thread_count(this->omp_thread_count);
+        }
+        
+        void set_memory_seed(int seed) {
+            this->memory_seed = seed;
+            if (this->memory_seed >= 0) {
+                this->memory_rng.seed(static_cast<unsigned int>(this->memory_seed));
+            } else {
+                std::random_device rd;
+                this->memory_rng.seed(rd());
+            }
+        }
+
+        // Returns the memory strength vector (length bit_count) for a given leg.
+        // If an explicit memory_strengths_per_leg override was provided at construction,
+        // that is returned directly. Otherwise strengths are auto-generated: leg 0 always
+        // uses the constant `gamma0` for every bit, and legs > 0 draw a fresh random value
+        // per bit, uniformly from [gamma_dist_interval[0], gamma_dist_interval[1]].
+        std::vector<double> generate_memory_strengths_for_leg(int leg) {
+            if (!this->memory_strengths_per_leg.empty()) {
+                return this->memory_strengths_per_leg[leg];
+            }
+
+            std::vector<double> memory_strengths(this->bit_count);
+            if (leg == 0) {
+                std::fill(memory_strengths.begin(), memory_strengths.end(), this->gamma0);
+            } else {
+                std::uniform_real_distribution<double> dist(this->gamma_dist_interval[0],
+                                                              this->gamma_dist_interval[1]);
+                for (int i = 0; i < this->bit_count; i++) {
+                    memory_strengths[i] = dist(this->memory_rng);
+                }
+            }
+            return memory_strengths;
         }
 
         ~RelayBpDecoder() = default;
@@ -120,9 +172,8 @@ namespace ldpc::relay {
                         (1 - this->channel_probabilities[i]) / this->channel_probabilities[i]);
                     this->log_prob_ratios[i] = this->initial_log_prob_ratios[i];
                 }
-                else if (!(this->ibm_implementation)) { //Carry over log_prob_ratios from previous leg
-                    this->initial_log_prob_ratios[i] = this->log_prob_ratios[i];
-                }
+                // For leg > 0, initial_log_prob_ratios[i] is intentionally left as it was set on
+                // leg 0 (no carry-over of the previous leg's a-posteriori log_prob_ratios).
 
                 for (auto &e: this->pcm.iterate_column(i)) {
                     e.bit_to_check_msg = this->initial_log_prob_ratios[i];
@@ -142,26 +193,28 @@ namespace ldpc::relay {
 
         std::vector<uint8_t> &bp_decode_parallel(std::vector<uint8_t> &syndrome) override {
             //Reset outputs from previous run
-            std::fill(this->iterations_per_leg.begin(), this->iterations_per_leg.end(), 0);
-            std::fill(this->convergence_per_leg.begin(), this->convergence_per_leg.end(), false);
             std::fill(this->decoding.begin(), this->decoding.end(), 0);
             std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
             this->solution_number = 0;
-            for (int leg = 0; leg < maximum_legs; leg++) {
-                std::fill(this->decoding_per_leg[leg].begin(), this->decoding_per_leg[leg].end(), 0);
-                std::fill(this->log_prob_ratios_per_leg[leg].begin(), this->log_prob_ratios_per_leg[leg].end(), 0);
-            }
+            this->total_iterations = 0;
+
+            // Tracks the best (lowest-weight, converged) solution seen so far across legs,
+            // without needing to keep every leg's decoding/log_prob_ratios around.
+            bool any_converged = false;
+            double best_weight = std::numeric_limits<double>::max();
+            std::vector<uint8_t> best_decoding(this->bit_count, 0);
+            std::vector<double> best_log_prob_ratios(this->bit_count, 0.0);
 
             for (int leg = 0; leg < this->maximum_legs; leg++) {
                 this->iterations = 0;
                 this->converge = 0;
 
                 this->initialise_log_domain_bp_relay(leg);
-                int maximum_iterations = this->maximum_iterations_per_leg[leg];
-                std::vector<double> memory_strengths = this->memory_strengths_per_leg[leg];
+                int leg_max_iterations = (leg == 0) ? this->iterations0 : this->maximum_iterations;
+                std::vector<double> memory_strengths = this->generate_memory_strengths_for_leg(leg);
 
                 //main interation loop
-                for (int it = 1; it <= maximum_iterations; it++) {
+                for (int it = 1; it <= leg_max_iterations; it++) {
 
                     if (this->bp_method == ldpc::bp::PRODUCT_SUM) {
                         for (int i = 0; i < this->check_count; i++) {
@@ -290,31 +343,30 @@ namespace ldpc::relay {
                     }
                 }
 
-                this->decoding_per_leg[leg] = this->decoding;
-                this->log_prob_ratios_per_leg[leg] = this->log_prob_ratios;
-                this->iterations_per_leg[leg] = this->iterations;
-                this->convergence_per_leg[leg] = this->converge;
+                this->total_iterations += this->iterations;
+
+                if (this->converge) {
+                    double weight = this->decoding_weight(this->decoding);
+                    if (!any_converged || weight < best_weight) {
+                        best_weight = weight;
+                        best_decoding = this->decoding;
+                        best_log_prob_ratios = this->log_prob_ratios;
+                        any_converged = true;
+                    }
+                }
 
                 if (this->solution_number == this->maximum_solutions) {
                     break;
                 }
             }
-            //If no solutions found return the best effort (final) decoding
-            if (this->solution_number == 0) {
-                this->decoding = this->decoding_per_leg[this->maximum_legs-1];
+
+            if (any_converged) {
+                //Return the lowest-weight converged solution found across all legs
+                this->decoding = best_decoding;
+                this->log_prob_ratios = best_log_prob_ratios;
             }
-            //Find best decoding (lowest weight) result and return
-            double temp = std::numeric_limits<double>::max();
-            for (int leg = 0; leg < this->maximum_legs; leg++) {
-                if (!this->convergence_per_leg[leg]) {
-                    continue;
-                }
-                double weight = this->decoding_weight(this->decoding_per_leg[leg]);
-                if (weight < temp) {
-                    temp = weight;
-                    this->decoding = this->decoding_per_leg[leg];
-                }
-            }
+            //If no leg converged, this->decoding / this->log_prob_ratios already hold the
+            //best-effort result from the final leg that was run.
             return this->decoding;
         }
 

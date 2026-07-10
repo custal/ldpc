@@ -306,10 +306,10 @@ class RelayBpDecoderBase:
     def maximum_solutions(self, value: int) -> int: ...
 
     @property
-    def maximum_iterations_per_leg(self) -> np.ndarray: ...
+    def iterations0(self) -> int: ...
 
-    @maximum_iterations_per_leg.setter
-    def maximum_iterations_per_leg(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None: ...
+    @iterations0.setter
+    def iterations0(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None: ...
 
     @property
     def memory_strengths_per_leg(self) -> np.ndarray: ...
@@ -318,10 +318,22 @@ class RelayBpDecoderBase:
     def memory_strengths_per_leg(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None: ...
 
     @property
-    def ibm_implementation(self) -> bool: ...
+    def gamma0(self) -> float: ...
 
-    @ibm_implementation.setter
-    def ibm_implementation(self, value: bool) -> None: ...
+    @gamma0.setter
+    def gamma0(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None: ...
+
+    @property
+    def gamma_dist_interval(self) -> np.ndarray: ...
+
+    @gamma_dist_interval.setter
+    def gamma_dist_interval(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None: ...
+
+    @property
+    def memory_seed(self) -> int: ...
+
+    @memory_seed.setter
+    def memory_seed(self, value: int) -> None: ...
 
 
 class RelayBpDecoder(RelayBpDecoderBase):
@@ -346,8 +358,12 @@ class RelayBpDecoder(RelayBpDecoderBase):
         The maximum number of legs to run. Will finish early if maximum number of solutions is found.
     maximum_solutions: Optional[int] optional,
         The maximum number of solutions to find. The simulation will finish early if this number of solutions is found.
-    maximum_iterations_per_leg: Optional[np.ndarray] optional,
-        The maximum number of iteration to perform for each leg. This must be a list of integers of the same length as 'maximum_legs'
+    iterations0: Optional[int]
+        Number of BP iterations run on leg 0 (paired with gamma0)
+    gamma0: Optional[float]
+        Memory strengths for leg 0. Ignored if memory_strengths_per_leg is provided explicitly
+    gamma_dist_interval: Optional[List[float]]
+        Interval to sample memory strengths from for leg>0. Ignored if memory_strengths_per_leg is provided explicitly
     memory_strengths_per_leg: Optional[np.array] optional,
         The memory strengths to use on each leg. This must be a list of length 'maximum_legs' where each element is a
         list of floats representing the memory on each qubit for that leg.
@@ -372,21 +388,27 @@ class RelayBpDecoder(RelayBpDecoderBase):
         Use this parameter to specify the input type. Choose either: 1) 'syndrome' or 2) 'received_vector' or 3) 'auto'.
         Note, it is only necessary to specify this value when the parity check matrix is square. When the
         parity matrix is non-square, the input vector type is inferred automatically from its length.
+    memory_seed: int, optional
+        seed for the per-leg memory strength RNG; -1 -> seed non-deterministically
     """
 
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
-                 maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None,
-                 memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
+                 maximum_solutions: Optional[int] = 1, iterations0: Optional[int] = None, gamma0: Optional[int] = None,
+                 gamma_dist_interval: Optional[List[float]] = None,
+                 memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
-                 random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False, **kwargs): ...
+                 random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
+                 memory_seed: Optional[int] = -1, **kwargs): ...
 
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
-              error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
-              maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None,
-              memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
-              ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
-              random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False, **kwargs): ...
+                                 error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
+                                 maximum_solutions: Optional[int] = 1, iterations0: Optional[int] = None, gamma0: Optional[int] = None,
+                                 gamma_dist_interval: Optional[List[float]] = None,
+                                 memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
+                                 ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
+                                 random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
+                                 memory_seed: Optional[int] = -1, **kwargs): ...
 
     def decode(self, input_vector: np.ndarray) -> np.ndarray:
         """
@@ -419,16 +441,7 @@ class RelayBpDecoder(RelayBpDecoderBase):
         """
 
     @property
-    def decoding_per_leg(self) -> np.ndarray: ...
-
-    @property
-    def log_prob_ratios_per_leg(self) -> np.ndarray: ...
-
-    @property
-    def iterations_per_leg(self) -> np.ndarray: ...
-
-    @property
-    def convergence_per_leg(self) -> np.ndarray: ...
-
-    @property
     def solution_number(self) -> int: ...
+
+    @property
+    def total_iterations(self) -> int: ...

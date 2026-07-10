@@ -112,9 +112,12 @@ cdef class RelayBpDecoderBase:
 
         maximum_legs=kwargs.get("maximum_legs", None)
         maximum_solutions=kwargs.get("maximum_solutions", None)
-        maximum_iterations_per_leg=kwargs.get("maximum_iterations_per_leg", None)
+        iterations0=kwargs.get("iterations0", None)
+        gamma0=kwargs.get("gamma0", None)
+        gamma_dist_interval=kwargs.get("gamma_dist_interval", None)
         memory_strengths_per_leg=kwargs.get("memory_strengths_per_leg", None)
-        ibm_implementation=kwargs.get("ibm_implementation", False)
+        memory_seed=kwargs.get("memory_seed", -1)
+
 
         cdef int i, j, nonzero_count
         self.MEMORY_ALLOCATED=False
@@ -140,14 +143,21 @@ cdef class RelayBpDecoderBase:
             raise ValueError("Please specify 'maximum_legs'")
         cdef int l = maximum_legs
 
-        self._maximum_iterations_per_leg.resize(l)
-        self._memory_strengths_per_leg.resize(l)
-        for i in range(l):
-            self._memory_strengths_per_leg[i].resize(self.n)
+        if memory_strengths_per_leg is not None:
+            for i in range(l):
+                self._memory_strengths_per_leg[i].resize(self.n)
+        else:
+            self._memory_strengths_per_leg = {}
+
+        if gamma_dist_interval is not None:
+            self._gamma_dist_interval.resize(2)
+        else:
+            self._gamma_dist_interval = {}
 
         ## initialise the decoder with default values
-        self.bpd = new RelayBpDecoderCpp(self.pcm[0],self._error_channel,l,0,self._maximum_iterations_per_leg,
-                self._memory_strengths_per_leg,False,0,PRODUCT_SUM,PARALLEL,1.0,1,self._serial_schedule_order,0,False,SYNDROME)
+        self.bpd = new RelayBpDecoderCpp(self.pcm[0],self._error_channel,l,0,0,0,0.0,self._gamma_dist_interval,
+                self._memory_strengths_per_leg,PRODUCT_SUM,PARALLEL,1.0,1,self._serial_schedule_order,0,False,
+                SYNDROME, memory_seed)
 
         ## set the decoder parameters
         self.bp_method = bp_method
@@ -174,15 +184,18 @@ cdef class RelayBpDecoderBase:
 
         if maximum_solutions is None:
             raise ValueError("Please specify 'maximum_solutions'")
-        if maximum_iterations_per_leg is None:
-            raise ValueError("Please specify 'maximum_iterations_per_leg'")
+        if iterations0 is None:
+            raise ValueError("Please specify 'iterations0'")
+        if gamma0 is None:
+            raise ValueError("Please specify 'gamma0'")
         if memory_strengths_per_leg is None:
             raise ValueError("Please specify 'memory_strengths_per_leg'")
 
         self.maximum_solutions = maximum_solutions
-        self.maximum_iterations_per_leg = maximum_iterations_per_leg
+        self.iterations0 = iterations0
         self.memory_strengths_per_leg = memory_strengths_per_leg
-        self.ibm_implementation = ibm_implementation
+        self.gamma0 = gamma0
+        self.gamma_dist_interval = gamma_dist_interval
 
         self.MEMORY_ALLOCATED=True
 
@@ -627,21 +640,20 @@ cdef class RelayBpDecoderBase:
         self.bpd.maximum_solutions = value
 
     @property
-    def maximum_iterations_per_leg(self) -> np.ndarray:
-        out = np.zeros(self.maximum_legs).astype(int)
-        for i in range(self.maximum_legs):
-            out[i] = self.bpd.maximum_iterations_per_leg[i]
-        return out
+    def iterations0(self) -> int:
+        return self.bpd.iterations0
 
-    @maximum_iterations_per_leg.setter
-    def maximum_iterations_per_leg(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None:
-        if not len(value) == self.maximum_legs:
-            raise Exception("Input error. The `maximum_iterations_per_leg` input parameter must have length equal to the length of 'maximum_legs'.")
-        value = np.asarray(value, dtype=np.int64)
-        self.bpd.maximum_iterations_per_leg = value
+    @iterations0.setter
+    def iterations0(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None:
+        if not isinstance(value, (int, np.int64, np.int32)) or value<0:
+            raise ValueError(f"'iterations0' is invalid. It must be a non-negative integer.")
+        self.bpd.iterations0 = value
 
     @property
     def memory_strengths_per_leg(self) -> np.ndarray:
+        if self.bpd.memory_strengths_per_leg.size() == 0:
+            return None
+
         out = np.zeros((self.maximum_legs, self.n)).astype(float)
         for i in range(self.maximum_legs):
             for j in range(self.n):
@@ -650,18 +662,58 @@ cdef class RelayBpDecoderBase:
 
     @memory_strengths_per_leg.setter
     def memory_strengths_per_leg(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None:
+        if value is None:
+            self.memory_strengths_per_leg = NULL_INT_VECTOR
+            return
+
         if not len(value) == self.maximum_legs or not all([self.n == len(row) for row in value]):
             raise Exception(f"Input error. The `memory_strengths_per_leg` input parameter must have shape {(self.maximum_legs, self.n)} but has shape {(len(value), len(value[0]))}.")
         value = np.asarray(value, dtype=np.float64)
         self.bpd.memory_strengths_per_leg = value
 
     @property
-    def ibm_implementation(self) -> bool:
-        return self.bpd.ibm_implementation
+    def gamma0(self) -> float:
+        return self.bpd.gamma0
 
-    @ibm_implementation.setter
-    def ibm_implementation(self, value: bool) -> None:
-        self.bpd.ibm_implementation = value
+    @gamma0.setter
+    def gamma0(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None:
+        if not isinstance(value, (float, np.float64, np.float32)):
+            raise ValueError(f"'gamma0' is invalid. It must be a float.")
+        self.bpd.gamma0 = value
+
+    @property
+    def gamma_dist_interval(self) -> np.ndarray:
+        if self.bpd.gamma_dist_interval.size() == 0:
+            return None
+
+        out = np.zeros(2).astype(float)
+        for i in range(2):
+            out[i] = self.bpd.gamma_dist_interval[i]
+        return out
+
+    @gamma_dist_interval.setter
+    def gamma_dist_interval(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None:
+        if value is None:
+            self.gamma_dist_interval = NULL_INT_VECTOR
+            return
+
+        if not len(value) == 2:
+            raise Exception(f"Input error. The `gamma_dist_interval` input parameter must have be length 2 but is length {len(value)}.")
+        value = np.asarray(value, dtype=np.float64)
+
+        self.bpd.gamma_dist_interval = value
+
+    @property
+    def memory_seed(self) -> int:
+        return self.bpd.memory_seed
+
+    @memory_seed.setter
+    def memory_seed(self, value: int) -> None:
+        if not isinstance(value, int) or value < -2:
+            raise ValueError("The value of 'memory_seed' must\
+            be a positive integer. Set as -1 to disable seed")
+
+        self.bpd.set_memory_seed(value)
 
 
 cdef class RelayBpDecoder(RelayBpDecoderBase):
@@ -686,8 +738,12 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
         The maximum number of legs to run. Will finish early if maximum number of solutions is found.
     maximum_solutions: Optional[int] optional,
         The maximum number of solutions to find. The simulation will finish early if this number of solutions is found.
-    maximum_iterations_per_leg: Optional[np.ndarray] optional,
-        The maximum number of iteration to perform for each leg. This must be a list of integers of the same length as 'maximum_legs'
+    iterations0: Optional[int]
+        Number of BP iterations run on leg 0 (paired with gamma0)
+    gamma0: Optional[float]
+        Memory strengths for leg 0. Ignored if memory_strengths_per_leg is provided explicitly
+    gamma_dist_interval: Optional[List[float]]
+        Interval to sample memory strengths from for leg>0. Ignored if memory_strengths_per_leg is provided explicitly
     memory_strengths_per_leg: Optional[np.array] optional,
         The memory strengths to use on each leg. This must be a list of length 'maximum_legs' where each element is a
         list of floats representing the memory on each qubit for that leg.
@@ -712,14 +768,18 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
         Use this parameter to specify the input type. Choose either: 1) 'syndrome' or 2) 'received_vector' or 3) 'auto'.
         Note, it is only necessary to specify this value when the parity check matrix is square. When the
         parity matrix is non-square, the input vector type is inferred automatically from its length.
+    memory_seed: int, optional
+        seed for the per-leg memory strength RNG; -1 -> seed non-deterministically
     """
 
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
-                 maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None,
-                 memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
+                 maximum_solutions: Optional[int] = 1, iterations0: Optional[int] = None, gamma0: Optional[int] = None,
+                 gamma_dist_interval: Optional[List[float]] = None,
+                 memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
-                 random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False, **kwargs):
+                 random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
+                 memory_seed: Optional[int] = -1, **kwargs):
 
         for key in kwargs.keys():
             if key not in ["channel_probs"]:
@@ -731,11 +791,13 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
         pass
 
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
-              error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
-              maximum_solutions: Optional[int] = 1, maximum_iterations_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None,
-              memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, ibm_implementation: Optional[bool] = False, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
-              ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
-              random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False, **kwargs):
+                                 error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
+                                 maximum_solutions: Optional[int] = 1, iterations0: Optional[int] = None, gamma0: Optional[int] = None,
+                                 gamma_dist_interval: Optional[List[float]] = None,
+                                 memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
+                                 ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
+                                 random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
+                                 memory_seed: Optional[int] = -1, **kwargs):
 
         pass
 
@@ -809,35 +871,9 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
         return out
 
     @property
-    def decoding_per_leg(self) -> np.ndarray:
-        out = np.zeros((self.maximum_legs, self.n)).astype(int)
-        for i in range(self.maximum_legs):
-            for j in range(self.n):
-                out[i][j] = self.bpd.decoding_per_leg[i][j]
-        return out
-
-    @property
-    def log_prob_ratios_per_leg(self) -> np.ndarray:
-        out = np.zeros((self.maximum_legs, self.n)).astype(float)
-        for i in range(self.maximum_legs):
-            for j in range(self.n):
-                out[i][j] = self.bpd.log_prob_ratios_per_leg[i][j]
-        return out
-
-    @property
-    def iterations_per_leg(self) -> np.ndarray:
-        out = np.zeros(self.maximum_legs).astype(int)
-        for i in range(self.maximum_legs):
-            out[i] = self.bpd.iterations_per_leg[i]
-        return out
-
-    @property
-    def convergence_per_leg(self) -> np.ndarray:
-        out = np.zeros(self.maximum_legs).astype(np.bool_)
-        for i in range(self.maximum_legs):
-            out[i] = self.bpd.convergence_per_leg[i]
-        return out
-
-    @property
     def solution_number(self) -> int:
         return self.bpd.solution_number
+
+    @property
+    def total_iterations(self) -> int:
+        return self.bpd.total_iterations
