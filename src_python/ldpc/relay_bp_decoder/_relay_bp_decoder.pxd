@@ -15,8 +15,8 @@ cdef extern from "relay_bp.hpp" namespace "ldpc::relay":
                 vector[double] channel_probabilities,
                 int maximum_legs,
                 int maximum_solutions,
-                int maximum_iterations,
                 int iterations0,
+                int maximum_iterations,
                 double gamma0,
                 vector[double] gamma_dist_interval,
                 vector[vector[double]] memory_strengths_per_leg,
@@ -52,7 +52,6 @@ cdef class RelayBpDecoderBase:
     cdef bool MEMORY_ALLOCATED
     cdef RelayBpDecoderCpp *bpd
     cdef str user_dtype
-    cdef int random_schedule_seed
 
 cdef class RelayBpDecoder(RelayBpDecoderBase):
     cdef vector[uint8_t] _received_vector

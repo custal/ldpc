@@ -139,20 +139,25 @@ cdef class RelayBpDecoderBase:
         self._serial_schedule_order = NULL_INT_VECTOR
 
         # Maximum legs needs to be specified on initialisation of RelayBpDecoderCpp because it defines the size other parameters
+        cdef int l
         if maximum_legs is None:
             raise ValueError("Please specify 'maximum_legs'")
-        cdef int l = maximum_legs
+        if not isinstance(maximum_legs, (int, np.integer)) or maximum_legs <= 0:
+            raise ValueError("'maximum_legs' must be a positive integer.")
+        l = maximum_legs
 
         if memory_strengths_per_leg is not None:
+            self._memory_strengths_per_leg.resize(l)
+
             for i in range(l):
                 self._memory_strengths_per_leg[i].resize(self.n)
         else:
-            self._memory_strengths_per_leg = {}
+            self._memory_strengths_per_leg.clear()
 
         if gamma_dist_interval is not None:
             self._gamma_dist_interval.resize(2)
         else:
-            self._gamma_dist_interval = {}
+            self._gamma_dist_interval.clear()
 
         ## initialise the decoder with default values
         self.bpd = new RelayBpDecoderCpp(self.pcm[0],self._error_channel,l,0,0,0,0.0,self._gamma_dist_interval,
@@ -186,16 +191,31 @@ cdef class RelayBpDecoderBase:
             raise ValueError("Please specify 'maximum_solutions'")
         if iterations0 is None:
             raise ValueError("Please specify 'iterations0'")
-        if gamma0 is None:
-            raise ValueError("Please specify 'gamma0'")
+
         if memory_strengths_per_leg is None:
-            raise ValueError("Please specify 'memory_strengths_per_leg'")
+            if gamma0 is None:
+                raise ValueError(
+                    "Please specify 'gamma0' when "
+                    "'memory_strengths_per_leg' is not provided."
+                )
+            if gamma_dist_interval is None:
+                raise ValueError(
+                    "Please specify 'gamma_dist_interval' when "
+                    "'memory_strengths_per_leg' is not provided."
+                )
+            if len(gamma_dist_interval) != 2:
+                raise ValueError(
+                    "'gamma_dist_interval' must contain exactly two values."
+                )
 
         self.maximum_solutions = maximum_solutions
         self.iterations0 = iterations0
-        self.memory_strengths_per_leg = memory_strengths_per_leg
-        self.gamma0 = gamma0
-        self.gamma_dist_interval = gamma_dist_interval
+
+        if memory_strengths_per_leg is not None:
+            self.memory_strengths_per_leg = memory_strengths_per_leg
+        else:
+            self.gamma0 = gamma0
+            self.gamma_dist_interval = gamma_dist_interval
 
         self.MEMORY_ALLOCATED=True
 
@@ -623,12 +643,6 @@ cdef class RelayBpDecoderBase:
     def maximum_legs(self) -> int:
        return self.bpd.maximum_legs
 
-    @maximum_legs.setter
-    def maximum_legs(self, value: int) -> None:
-        if not isinstance(value, (int, np.int64, np.int32)) or value<0:
-            raise ValueError(f"'maximum_legs' is invalid. It must be a non-negative integer.")
-        self.bpd.maximum_legs = value
-
     @property
     def maximum_solutions(self) -> int:
         return self.bpd.maximum_solutions
@@ -661,15 +675,33 @@ cdef class RelayBpDecoderBase:
         return out
 
     @memory_strengths_per_leg.setter
-    def memory_strengths_per_leg(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None:
+    def memory_strengths_per_leg(self, value):
+        cdef int i, j
+
         if value is None:
-            self.memory_strengths_per_leg = NULL_INT_VECTOR
+            self.bpd.memory_strengths_per_leg.clear()
             return
 
-        if not len(value) == self.maximum_legs or not all([self.n == len(row) for row in value]):
-            raise Exception(f"Input error. The `memory_strengths_per_leg` input parameter must have shape {(self.maximum_legs, self.n)} but has shape {(len(value), len(value[0]))}.")
         value = np.asarray(value, dtype=np.float64)
-        self.bpd.memory_strengths_per_leg = value
+
+        if value.ndim != 2 or value.shape != (
+            self.maximum_legs,
+            self.n
+        ):
+            raise ValueError(
+                "memory_strengths_per_leg must have shape "
+                f"{(self.maximum_legs, self.n)}, not {value.shape}."
+            )
+
+        self.bpd.memory_strengths_per_leg.clear()
+        self.bpd.memory_strengths_per_leg.resize(
+            self.maximum_legs
+        )
+
+        for i in range(self.maximum_legs):
+            self.bpd.memory_strengths_per_leg[i].resize(self.n)
+            for j in range(self.n):
+                self.bpd.memory_strengths_per_leg[i][j] = value[i, j]
 
     @property
     def gamma0(self) -> float:
@@ -692,16 +724,24 @@ cdef class RelayBpDecoderBase:
         return out
 
     @gamma_dist_interval.setter
-    def gamma_dist_interval(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None:
+    def gamma_dist_interval(self, value):
+        cdef int i
+
         if value is None:
-            self.gamma_dist_interval = NULL_INT_VECTOR
+            self.bpd.gamma_dist_interval.clear()
             return
 
-        if not len(value) == 2:
-            raise Exception(f"Input error. The `gamma_dist_interval` input parameter must have be length 2 but is length {len(value)}.")
         value = np.asarray(value, dtype=np.float64)
 
-        self.bpd.gamma_dist_interval = value
+        if value.ndim != 1 or len(value) != 2:
+            raise ValueError(
+                "gamma_dist_interval must contain exactly two values."
+            )
+
+        self.bpd.gamma_dist_interval.resize(2)
+        for i in range(2):
+            self.bpd.gamma_dist_interval[i] = value[i]
+
 
     @property
     def memory_seed(self) -> int:
@@ -742,7 +782,7 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
         Number of BP iterations run on leg 0 (paired with gamma0)
     gamma0: Optional[float]
         Memory strengths for leg 0. Ignored if memory_strengths_per_leg is provided explicitly
-    gamma_dist_interval: Optional[List[float]]
+    gamma_dist_interval: Optional[Union[List[float], Tuple]]
         Interval to sample memory strengths from for leg>0. Ignored if memory_strengths_per_leg is provided explicitly
     memory_strengths_per_leg: Optional[np.array] optional,
         The memory strengths to use on each leg. This must be a list of length 'maximum_legs' where each element is a
@@ -775,7 +815,7 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
                  maximum_solutions: Optional[int] = 1, iterations0: Optional[int] = None, gamma0: Optional[int] = None,
-                 gamma_dist_interval: Optional[List[float]] = None,
+                 gamma_dist_interval: Optional[Union[List[float], Tuple]] = None,
                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
@@ -793,7 +833,7 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
                                  maximum_solutions: Optional[int] = 1, iterations0: Optional[int] = None, gamma0: Optional[int] = None,
-                                 gamma_dist_interval: Optional[List[float]] = None,
+                                 gamma_dist_interval: Optional[Union[List[float], Tuple]] = None,
                                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,

@@ -296,9 +296,6 @@ class RelayBpDecoderBase:
     @property
     def maximum_legs(self) -> int: ...
 
-    @maximum_legs.setter
-    def maximum_legs(self, value: int) -> None: ...
-
     @property
     def maximum_solutions(self) -> int: ...
 
@@ -315,7 +312,7 @@ class RelayBpDecoderBase:
     def memory_strengths_per_leg(self) -> np.ndarray: ...
 
     @memory_strengths_per_leg.setter
-    def memory_strengths_per_leg(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None: ...
+    def memory_strengths_per_leg(self, value): ...
 
     @property
     def gamma0(self) -> float: ...
@@ -327,7 +324,8 @@ class RelayBpDecoderBase:
     def gamma_dist_interval(self) -> np.ndarray: ...
 
     @gamma_dist_interval.setter
-    def gamma_dist_interval(self, value: Optional[Union[np.ndarray, List, Tuple]]) -> None: ...
+    def gamma_dist_interval(self, value): ...
+
 
     @property
     def memory_seed(self) -> int: ...
@@ -362,7 +360,7 @@ class RelayBpDecoder(RelayBpDecoderBase):
         Number of BP iterations run on leg 0 (paired with gamma0)
     gamma0: Optional[float]
         Memory strengths for leg 0. Ignored if memory_strengths_per_leg is provided explicitly
-    gamma_dist_interval: Optional[List[float]]
+    gamma_dist_interval: Optional[Union[List[float], Tuple]]
         Interval to sample memory strengths from for leg>0. Ignored if memory_strengths_per_leg is provided explicitly
     memory_strengths_per_leg: Optional[np.array] optional,
         The memory strengths to use on each leg. This must be a list of length 'maximum_legs' where each element is a
@@ -395,7 +393,7 @@ class RelayBpDecoder(RelayBpDecoderBase):
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
                  maximum_solutions: Optional[int] = 1, iterations0: Optional[int] = None, gamma0: Optional[int] = None,
-                 gamma_dist_interval: Optional[List[float]] = None,
+                 gamma_dist_interval: Optional[Union[List[float], Tuple]] = None,
                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
@@ -404,7 +402,7 @@ class RelayBpDecoder(RelayBpDecoderBase):
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
                                  maximum_solutions: Optional[int] = 1, iterations0: Optional[int] = None, gamma0: Optional[int] = None,
-                                 gamma_dist_interval: Optional[List[float]] = None,
+                                 gamma_dist_interval: Optional[Union[List[float], Tuple]] = None,
                                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
