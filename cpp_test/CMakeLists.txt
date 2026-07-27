@@ -20,6 +20,7 @@ set(TEST_EXECUTABLES
     TestBPDecoder
     TestOsdDecoder
 	TestRelayBPDecoder
+	TestAutBPDecoder
     TestSoftInfo
     TestFlipDecoder
     TestGf2Codes
@@ -45,3 +46,6 @@ foreach(TEST ${TEST_EXECUTABLES})
 	target_link_libraries(${TEST} PRIVATE gtest_main ldpc)  # Link the libraries
 	gtest_discover_tests(${TEST})  # Discover and register the tests
 endforeach()
+
+# TestAutBPDecoder additionally needs the bliss library
+target_link_libraries(TestAutBPDecoder PRIVATE Bliss::libbliss)

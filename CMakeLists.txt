@@ -35,6 +35,16 @@ if (LDPC_MASTER_PROJECT)
 	add_subdirectory(cpp_example)
 endif()
 
+add_executable(
+		autbp
+		src_cpp/autbp.cpp)
+
+add_subdirectory(external/bliss)
+target_link_libraries(
+		autbp
+		PRIVATE
+			Bliss::libbliss)
+
 if(BUILD_LDPC_TESTS)
 	# Add test code
 	enable_testing()
