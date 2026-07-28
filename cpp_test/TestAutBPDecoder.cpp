@@ -50,12 +50,7 @@ Permutation reversal_permutation(size_t n, size_t m) {
 
 DecoderFactory basic_bp_factory(int maximum_iterations = 10) {
     return ldpc::autbp::make_bp_factory(
-        maximum_iterations,
-        ldpc::bp::PRODUCT_SUM,
-        ldpc::bp::PARALLEL,
-        1.0,
-        1,
-        1
+        maximum_iterations
     );
 }
 
@@ -76,7 +71,6 @@ AutBpDecoder make_rep_autbp(
         std::move(priors),
         std::move(permutations),
         basic_bp_factory(maximum_iterations),
-        {},
         maximum_solutions
     );
 }
@@ -154,6 +148,8 @@ TEST(AutBpGraphAutomorphisms, SplitTannerPermutationRejectsWrongSizeOrMixedColor
             vector<size_t>{0, 1}, 2, 1),
         std::invalid_argument
     );
+    // The two colours are bit and check. The first 2 vetices are bit and the last is check but the defined map
+    // permutes 2<->0 which maps a check to a bit so should be invalid
     EXPECT_THROW(
         ldpc::autbp::graph_automorphisms::split_tanner_permutation(
             vector<size_t>{2, 1, 0}, 2, 1),
@@ -210,18 +206,7 @@ TEST(AutBpDecoder, RejectsZeroMaximumSolutions) {
     auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(3);
     EXPECT_THROW(
         AutBpDecoder(pcm, vector<double>(3, 0.1),
-                     {identity_permutation(pcm.n, pcm.m)}, basic_bp_factory(),
-                     {}, size_t{0}),
-        std::invalid_argument
-    );
-}
-
-TEST(AutBpDecoder, RejectsObservableIndexOutsideCode) {
-    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(3);
-    EXPECT_THROW(
-        AutBpDecoder(pcm, vector<double>(3, 0.1),
-                     {identity_permutation(pcm.n, pcm.m)}, basic_bp_factory(),
-                     {{0, 3}}),
+                     {identity_permutation(pcm.n, pcm.m)}, basic_bp_factory(), size_t{0}),
         std::invalid_argument
     );
 }
@@ -412,8 +397,7 @@ TEST(AutBpDecoder, DoesNotMutateSourceMatrix) {
     EXPECT_EQ(before, pcm.mulvec(probe));
 }
 
-// BLISS integration smoke test.  It deliberately avoids asserting generator
-// order, because that is not part of the wrapper's contract.
+// BLISS integration smoke test. .
 TEST(AutBpGraphAutomorphisms, DiscoveryIncludesIdentityAndProducesValidMaps) {
     const int n = 3;
     auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
@@ -422,16 +406,17 @@ TEST(AutBpGraphAutomorphisms, DiscoveryIncludesIdentityAndProducesValidMaps) {
 
     ASSERT_FALSE(automorphisms.empty());
     EXPECT_EQ((vector<size_t>{0, 1, 2}),
-              automorphisms.front().old_col_for_new);
-    ASSERT_TRUE(automorphisms.front().old_row_for_new.has_value());
+              automorphisms[0].old_col_for_new);
+    ASSERT_TRUE(automorphisms[0].old_row_for_new.has_value());
     EXPECT_EQ((vector<size_t>{0, 1}),
-              *automorphisms.front().old_row_for_new);
+              *automorphisms[0].old_row_for_new);
 
-    for (const auto& p : automorphisms) {
-        EXPECT_EQ(static_cast<size_t>(pcm.n), p.old_col_for_new.size());
-        ASSERT_TRUE(p.old_row_for_new.has_value());
-        EXPECT_EQ(static_cast<size_t>(pcm.m), p.old_row_for_new->size());
-    }
+    // Expected permutation for 3 bit repetition code
+    EXPECT_EQ((vector<size_t>{2, 1, 0}),
+              automorphisms[1].old_col_for_new);
+    ASSERT_TRUE(automorphisms[0].old_row_for_new.has_value());
+    EXPECT_EQ((vector<size_t>{1, 0}),
+              *automorphisms[1].old_row_for_new);
 }
 
 int main(int argc, char** argv) {

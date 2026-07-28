@@ -15,7 +15,9 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+extern "C" { // Claude told me to do this to fix a linkage issue
 #include <bliss/bliss_C.h>
+}
 #include "bp.hpp"
 #include "relay_bp.hpp"
 
@@ -146,68 +148,87 @@ namespace graph_automorphisms {
 }
 
 DecoderFactory make_bp_factory(
-    int maximum_iterations,
-    ldpc::bp::BpMethod bp_method,
-    ldpc::bp::BpSchedule schedule,
-    double min_sum_scaling_factor,
-    int serial_schedule_order,
-    int omp_thread_count
+        int iterations,
+        ldpc::bp::BpMethod bp_method = ldpc::bp::MINIMUM_SUM,
+        ldpc::bp::BpSchedule schedule = ldpc::bp::PARALLEL,
+        double min_sum_scaling_factor = 1.0,
+        int omp_threads = 1,
+        const std::vector<int> &serial_schedule = ldpc::bp::NULL_INT_VECTOR,
+        int random_schedule_seed = 0,
+        bool random_serial_schedule = false,
+        ldpc::bp::BpInputType bp_input_type = ldpc::bp::AUTO
     ) {
     return [
-        maximum_iterations,
+        iterations,
         bp_method,
         schedule,
         min_sum_scaling_factor,
-        serial_schedule_order,
-        omp_thread_count
+        omp_threads,
+        serial_schedule,
+        random_schedule_seed,
+        random_serial_schedule,
+        bp_input_type
     ](
         ldpc::bp::BpSparse& pcm,
         std::vector<double> channel_probabilities
     ) -> std::unique_ptr<ldpc::bp::BpDecoder> {
-        return std::make_unique<ldpc::bp::BpDecoder>(
+        return std::make_unique<ldpc::relay::RelayBpDecoder>(
             pcm,
             std::move(channel_probabilities),
-            maximum_iterations,
+            1,
+            1,
+            iterations,
+            iterations,
+            0.0,
+            std::vector<double>{0.0, 0.0},
+            std::vector<std::vector<double>>{},
             bp_method,
             schedule,
             min_sum_scaling_factor,
-            serial_schedule_order,
-            ldpc::bp::NULL_INT_VECTOR,
-            omp_thread_count,
-            false,
-            ldpc::bp::SYNDROME
+            omp_threads,
+            serial_schedule,
+            random_schedule_seed,
+            random_serial_schedule,
+            bp_input_type,
+            -1
         );
     };
 }
 
 DecoderFactory make_relay_bp_factory(
-    int maximum_legs,
-    int maximum_solutions,
-    int initial_iterations,
-    int maximum_iterations,
-    double initial_gamma,
-    std::vector<double> gamma_values,
-    std::vector<std::vector<double>> memory_values,
-    ldpc::bp::BpMethod bp_method,
-    ldpc::bp::BpSchedule schedule,
-    double min_sum_scaling_factor,
-    int serial_schedule_order,
-    int omp_thread_count,
-    int memory_seed
+            int maximum_legs,
+            int maximum_solutions,
+            int iterations0, //Number of BP iterations run on leg 0 (paired with gamma0)
+            int maximum_iterations, //Number of BP iterations run on every leg after the first (paired with gamma_dist_interval)
+            double gamma0 = 0.0, //Ignored if memory_strengths_per_leg is provided explicitly
+            std::vector<double> gamma_dist_interval = {}, //Ignored if memory_strengths_per_leg is provided explicitly
+            std::vector<std::vector<double>> memory_strengths_per_leg = {}, //Optional explicit (maximum_legs x bit_count) override; if given, takes precedence over gamma0/gamma_dist_interval
+            ldpc::bp::BpMethod bp_method = ldpc::bp::MINIMUM_SUM,
+            ldpc::bp::BpSchedule schedule = ldpc::bp::PARALLEL,
+            double min_sum_scaling_factor = 1.0,
+            int omp_threads = 1,
+            const std::vector<int> &serial_schedule = ldpc::bp::NULL_INT_VECTOR,
+            int random_schedule_seed = 0,
+            bool random_serial_schedule = false,
+            ldpc::bp::BpInputType bp_input_type = ldpc::bp::AUTO,
+            int memory_seed = -1 // seed for the per-leg memory strength RNG; -1 -> seed non-deterministically
     ) {
     return [
         maximum_legs,
         maximum_solutions,
-        initial_iterations,
+        iterations0,
         maximum_iterations,
-        initial_gamma,
-        gamma_values = std::move(gamma_values),
-        memory_values = std::move(memory_values),
+        gamma0,
+        gamma_dist_interval,
+        memory_strengths_per_leg,
         bp_method,
         schedule,
         min_sum_scaling_factor,
-        serial_schedule_order,
-        omp_thread_count,
+        omp_threads,
+        serial_schedule,
+        random_schedule_seed,
+        random_serial_schedule,
+        bp_input_type,
         memory_seed
     ](
         ldpc::bp::BpSparse& pcm,
@@ -218,19 +239,19 @@ DecoderFactory make_relay_bp_factory(
             std::move(channel_probabilities),
             maximum_legs,
             maximum_solutions,
-            initial_iterations,
+            iterations0,
             maximum_iterations,
-            initial_gamma,
-            gamma_values,
-            memory_values,
+            gamma0,
+            gamma_dist_interval,
+            memory_strengths_per_leg,
             bp_method,
             schedule,
             min_sum_scaling_factor,
-            serial_schedule_order,
-            ldpc::bp::NULL_INT_VECTOR,
-            omp_thread_count,
-            false,
-            ldpc::bp::SYNDROME,
+            omp_threads,
+            serial_schedule,
+            random_schedule_seed,
+            random_serial_schedule,
+            bp_input_type,
             memory_seed
         );
     };
@@ -241,10 +262,9 @@ class AutBpDecoder {
 public:
     AutBpDecoder(const BpSparse& base_pcm, std::vector<double> priors,
                  std::vector<Permutation> permutations, DecoderFactory factory,
-                 std::vector<std::vector<std::size_t>> observables={},
                  std::optional<std::size_t> maximum_solutions=std::nullopt)
       : base_pcm_(clone_matrix(base_pcm)), priors_(std::move(priors)),
-        permutations_(std::move(permutations)), observables_(std::move(observables)),
+        permutations_(std::move(permutations)),
         maximum_solutions_(maximum_solutions) {
         initialise(std::move(factory));
     }
@@ -253,11 +273,10 @@ public:
        then eagerly construct one permuted PCM and decoder per automorphism. */
     AutBpDecoder(const BpSparse& base_pcm, std::vector<double> priors,
                  DecoderFactory factory, std::size_t max_automorphisms,
-                 std::vector<std::vector<std::size_t>> observables={},
                  std::optional<std::size_t> maximum_solutions=std::nullopt,
                  bool include_identity=true)
       : base_pcm_(clone_matrix(base_pcm)), priors_(std::move(priors)),
-        observables_(std::move(observables)), maximum_solutions_(maximum_solutions) {
+        maximum_solutions_(maximum_solutions) {
         permutations_=graph_automorphisms::find_from_pcm(
             *base_pcm_,max_automorphisms,include_identity);
         initialise(std::move(factory));
@@ -272,9 +291,8 @@ public:
         std::size_t solutions=0;
         for (std::size_t k=0;k<members_.size();++k) {
             auto s=permute_rows(syndrome,permutations_[k]);
-            auto x=members_[k].decoder->decode(s);
+            auto correction=members_[k].decoder->decode(s);
             stats_[k]={members_[k].decoder->iterations,members_[k].decoder->converge};
-            auto correction=unpermute(x,permutations_[k].old_col_for_new); // TODO: Should I be permuting the correction?
             if (k==0) fallback=correction;
             if (base_pcm_->mulvec(correction)!=syndrome) continue;
             ++solutions;
@@ -295,7 +313,6 @@ private:
     std::unique_ptr<BpSparse> base_pcm_;
     std::vector<double> priors_;
     std::vector<Permutation> permutations_;
-    std::vector<std::vector<std::size_t>> observables_;
     std::optional<std::size_t> maximum_solutions_;
     std::vector<Member> members_;
     std::vector<MemberStats> stats_;
@@ -305,7 +322,6 @@ private:
         if(permutations_.empty()) throw std::invalid_argument("permutations must be non-empty");
         if(priors_.size()!=static_cast<std::size_t>(base_pcm_->n)) throw std::invalid_argument("priors length must equal H.n");
         if(maximum_solutions_ && *maximum_solutions_==0) throw std::invalid_argument("maximum_solutions must be positive");
-        for(const auto& row:observables_) for(auto c:row) if(c>=priors_.size()) throw std::invalid_argument("observable index out of range");
         members_.reserve(permutations_.size()); stats_.resize(permutations_.size());
         for(const auto& p:permutations_) {
             validate_perm(p.old_col_for_new,base_pcm_->n);
@@ -329,8 +345,7 @@ private:
         auto out=std::make_unique<BpSparse>(h.m,h.n);
         std::vector<std::size_t> nc(p.old_col_for_new.size());
         for(std::size_t j=0;j<p.old_col_for_new.size();++j) nc[p.old_col_for_new[j]]=j;
-        std::vector<std::size_t> nr(h.m); if(p.old_row_for_new) for(std::size_t j=0;j<nr.size();++j) nr[(*p.old_row_for_new)[j]]=j; else for(std::size_t j=0;j<nr.size();++j) nr[j]=j;
-        auto& s=const_cast<BpSparse&>(h); for(int r=0;r<h.m;++r) for(auto& e:s.iterate_row(r)) out->insert_entry(nr[e.row_index],nc[e.col_index]);
+        auto& s=const_cast<BpSparse&>(h); for(int r=0;r<h.m;++r) for(auto& e:s.iterate_row(r)) out->insert_entry(e.row_index,nc[e.col_index]);
         return out;
     }
     static std::vector<double> permute_priors(const std::vector<double>& a,const std::vector<std::size_t>& p) {

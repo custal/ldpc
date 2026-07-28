@@ -35,7 +35,7 @@ if (LDPC_MASTER_PROJECT)
 	add_subdirectory(cpp_example)
 endif()
 
-add_executable(
+add_library(
 		autbp
 		src_cpp/autbp.cpp)
 
