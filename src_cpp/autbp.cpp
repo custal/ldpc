@@ -148,7 +148,7 @@ namespace graph_automorphisms {
 }
 
 DecoderFactory make_bp_factory(
-        int iterations,
+        int maximum_iterations,
         ldpc::bp::BpMethod bp_method = ldpc::bp::MINIMUM_SUM,
         ldpc::bp::BpSchedule schedule = ldpc::bp::PARALLEL,
         double min_sum_scaling_factor = 1.0,
@@ -159,7 +159,7 @@ DecoderFactory make_bp_factory(
         ldpc::bp::BpInputType bp_input_type = ldpc::bp::AUTO
     ) {
     return [
-        iterations,
+        maximum_iterations,
         bp_method,
         schedule,
         min_sum_scaling_factor,
@@ -177,8 +177,8 @@ DecoderFactory make_bp_factory(
             std::move(channel_probabilities),
             1,
             1,
-            iterations,
-            iterations,
+            maximum_iterations,
+            maximum_iterations,
             0.0,
             std::vector<double>{0.0, 0.0},
             std::vector<std::vector<double>>{},
@@ -260,6 +260,12 @@ DecoderFactory make_relay_bp_factory(
 
 class AutBpDecoder {
 public:
+    int iterations;
+    std::size_t solution_number;
+    std::vector<std::uint8_t> decoding;
+    bool converge;
+    std::vector<double> log_prob_ratios;
+
     AutBpDecoder(const BpSparse& base_pcm, std::vector<double> priors,
                  std::vector<Permutation> permutations, DecoderFactory factory,
                  std::optional<std::size_t> maximum_solutions=std::nullopt)
@@ -267,6 +273,11 @@ public:
         permutations_(std::move(permutations)),
         maximum_solutions_(maximum_solutions) {
         initialise(std::move(factory));
+        this->solution_number = 0;
+        this->iterations = 0;
+        this->converge = 0;
+        this->decoding.resize(priors_.size());
+        this->log_prob_ratios.resize(priors_.size());
     }
 
     /* Convenience constructor: discover Tanner-graph automorphisms with BLISS,
@@ -280,6 +291,11 @@ public:
         permutations_=graph_automorphisms::find_from_pcm(
             *base_pcm_,max_automorphisms,include_identity);
         initialise(std::move(factory));
+        this->solution_number = 0;
+        this->iterations = 0;
+        this->converge = 0;
+        this->decoding.resize(priors_.size());
+        this->log_prob_ratios.resize(priors_.size());
     }
 
     std::vector<std::uint8_t> decode(const std::vector<std::uint8_t>& syndrome) {
@@ -288,21 +304,30 @@ public:
         std::fill(stats_.begin(),stats_.end(),MemberStats{});
         std::vector<std::uint8_t> fallback,best;
         double best_score=-std::numeric_limits<double>::infinity();
-        std::size_t solutions=0;
+        this->solution_number=0;
+        this->iterations=0;
+        this->converge=0;
+        std::fill(this->decoding.begin(), this->decoding.end(), 0);
+        std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
+
         for (std::size_t k=0;k<members_.size();++k) {
             auto s=permute_rows(syndrome,permutations_[k]);
             auto correction=members_[k].decoder->decode(s);
             stats_[k]={members_[k].decoder->iterations,members_[k].decoder->converge};
-            if (k==0) fallback=correction;
+            this->iterations += members_[k].decoder->iterations;
+            if (k==0) fallback=correction; this->log_prob_ratios=members_[k].decoder->log_prob_ratios;
             if (base_pcm_->mulvec(correction)!=syndrome) continue;
-            ++solutions;
+            ++this->solution_number;
+            this->converge=true;
             double score=log_likelihood(correction);
-            if (best.empty() || score>best_score) { best=std::move(correction); best_score=score; }
-            if (maximum_solutions_ && solutions>=*maximum_solutions_) break;
+            if (best.empty() || score>best_score) { best=std::move(correction); best_score=score;
+                this->log_prob_ratios=members_[k].decoder->log_prob_ratios;}
+            if (maximum_solutions_ && this->solution_number>=*maximum_solutions_) break;
         }
-        if (!best.empty()) return best;
-        if (!fallback.empty()) return fallback;
-        return std::vector<std::uint8_t>(priors_.size(),0);
+        if (!best.empty()) this->decoding = best;
+        else if (!fallback.empty()) this->decoding = fallback;
+        else this->decoding = std::vector<std::uint8_t>(priors_.size(),0);
+        return this->decoding;
     }
 
     const std::vector<MemberStats>& last_member_stats() const noexcept { return stats_; }

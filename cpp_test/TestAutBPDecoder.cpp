@@ -385,6 +385,91 @@ TEST(AutBpDecoder, ZeroIterationMemberReturnsFallback) {
     EXPECT_EQ(0, decoder.last_member_stats()[0].iterations);
 }
 
+TEST(AutBpDecoder, PublicDecodeAttributesMatchSingleMemberDecoder) {
+    const int n = 5;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+    const vector<double> priors(n, 0.1);
+    vector<uint8_t> syndrome{0, 0, 0, 1};
+
+    // Run the underlying decoder directly to obtain deterministic reference
+    // values for every field copied or accumulated by AutBpDecoder.
+    auto reference = basic_bp_factory()(pcm, priors);
+    ASSERT_NE(nullptr, reference);
+    auto expected_decoding = reference->decode(syndrome);
+    ASSERT_EQ(syndrome, pcm.mulvec(expected_decoding));
+
+    AutBpDecoder decoder(
+        pcm,
+        priors,
+        {identity_permutation(pcm.n, pcm.m)},
+        basic_bp_factory()
+    );
+    const auto returned_decoding = decoder.decode(syndrome);
+
+    EXPECT_EQ(expected_decoding, returned_decoding);
+    EXPECT_EQ(returned_decoding, decoder.decoding);
+    EXPECT_EQ(reference->iterations, decoder.iterations);
+    EXPECT_EQ(1u, decoder.solution_number);
+    EXPECT_TRUE(decoder.converge);
+    EXPECT_EQ(reference->log_prob_ratios, decoder.log_prob_ratios);
+    EXPECT_EQ(static_cast<size_t>(n), decoder.log_prob_ratios.size());
+}
+
+TEST(AutBpDecoder, PublicDecodeAttributesAggregateAndResetBetweenCalls) {
+    const int n = 5;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+    auto decoder = make_rep_autbp(pcm, vector<double>(n, 0.1));
+
+    const vector<uint8_t> first_syndrome(pcm.m, 0);
+    const auto first_result = decoder.decode(first_syndrome);
+    const auto& first_stats = decoder.last_member_stats();
+    ASSERT_EQ(2u, first_stats.size());
+    ASSERT_TRUE(first_stats[0].converged);
+    ASSERT_TRUE(first_stats[1].converged);
+
+    EXPECT_EQ(first_result, decoder.decoding);
+    EXPECT_TRUE(decoder.converge);
+    EXPECT_EQ(2u, decoder.solution_number);
+    EXPECT_EQ(first_stats[0].iterations + first_stats[1].iterations,
+              decoder.iterations);
+    EXPECT_EQ(static_cast<size_t>(n), decoder.log_prob_ratios.size());
+
+    // A second call must describe that call only, rather than accumulate the
+    // public values from the first call.
+    const vector<uint8_t> second_syndrome{0, 0, 0, 1};
+    const auto second_result = decoder.decode(second_syndrome);
+    const auto& second_stats = decoder.last_member_stats();
+    ASSERT_EQ(2u, second_stats.size());
+
+    EXPECT_EQ(second_result, decoder.decoding);
+    EXPECT_EQ(second_syndrome, pcm.mulvec(decoder.decoding));
+    EXPECT_TRUE(decoder.converge);
+    EXPECT_EQ(2u, decoder.solution_number);
+    EXPECT_EQ(second_stats[0].iterations + second_stats[1].iterations,
+              decoder.iterations);
+    EXPECT_EQ(static_cast<size_t>(n), decoder.log_prob_ratios.size());
+}
+
+TEST(AutBpDecoder, PublicDecodeAttributesDescribeUnsuccessfulDecode) {
+    const int n = 3;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+    AutBpDecoder decoder(
+        pcm,
+        vector<double>(n, 0.1),
+        {identity_permutation(pcm.n, pcm.m)},
+        basic_bp_factory(0)
+    );
+
+    const auto returned_decoding = decoder.decode(vector<uint8_t>{1, 1});
+
+    EXPECT_EQ(returned_decoding, decoder.decoding);
+    EXPECT_EQ((vector<uint8_t>(n, 0)), decoder.decoding);
+    EXPECT_EQ(0u, decoder.solution_number);
+    EXPECT_EQ(0, decoder.iterations);
+    EXPECT_FALSE(decoder.converge);
+    EXPECT_EQ(static_cast<size_t>(n), decoder.log_prob_ratios.size());
+}
+
 TEST(AutBpDecoder, DoesNotMutateSourceMatrix) {
     const int n = 5;
     auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
