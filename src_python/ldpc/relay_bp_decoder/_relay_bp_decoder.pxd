@@ -39,7 +39,7 @@ cdef extern from "relay_bp.hpp" namespace "ldpc::relay":
             void set_memory_seed(int seed)
 
             int solution_number
-            int total_iterations
+            int iterations
 
 cdef class RelayBpDecoderBase:
     cdef BpSparse *pcm

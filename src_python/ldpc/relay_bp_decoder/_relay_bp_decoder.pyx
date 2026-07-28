@@ -915,5 +915,5 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
         return self.bpd.solution_number
 
     @property
-    def total_iterations(self) -> int:
-        return self.bpd.total_iterations
+    def iterations(self) -> int:
+        return self.bpd.iterations

@@ -636,7 +636,7 @@ def test_decode_zero_syndrome_updates_relay_state():
     # a zero syndrome is handled by the cython wrapper without calling the C++ object so we do not expect these values to increase
     assert decoder.solution_number == 0
     assert decoder.iter == 0
-    assert decoder.total_iterations == 0
+    assert decoder.iterations == 0
 
 
 def test_decode_output_shape():
@@ -693,7 +693,7 @@ def test_decode_rep_code_single_error():
         syndrome,
     )
     assert decoder.solution_number == 1
-    assert decoder.total_iterations > 0
+    assert decoder.iterations > 0
 
 
 @pytest.mark.parametrize(
@@ -738,8 +738,8 @@ def test_multileg_returned_solution_satisfies_syndrome(
         binary_syndrome(parity_check, result),
         syndrome,
     )
-    assert decoder.total_iterations > 0
-    assert decoder.total_iterations <= 30
+    assert decoder.iterations > 0
+    assert decoder.iterations <= 30
 
 
 def test_maximum_solutions_causes_early_exit():
@@ -766,10 +766,10 @@ def test_maximum_solutions_causes_early_exit():
     decoder.decode(syndrome)
 
     assert decoder.solution_number == 1
-    assert decoder.total_iterations == 1
+    assert decoder.iterations == 1
 
 
-def test_total_iterations_is_bounded_by_leg_limits():
+def test_iterations_is_bounded_by_leg_limits():
     parity_check = rep_code(3)
     n = parity_check.shape[1]
 
@@ -799,7 +799,7 @@ def test_total_iterations_is_bounded_by_leg_limits():
     syndrome = np.array([1, 1], dtype=np.uint8)
     result = decoder.decode(syndrome)
 
-    assert 0 < decoder.total_iterations <= 140
+    assert 0 < decoder.iterations <= 140
 
     if decoder.solution_number > 0:
         assert np.array_equal(
@@ -835,7 +835,7 @@ def test_state_resets_between_decode_calls():
     decoder.decode(first_syndrome)
 
     assert decoder.solution_number == 1
-    assert decoder.total_iterations > 0
+    assert decoder.iterations > 0
 
     # Force the next call to execute zero BP iterations.
     decoder.iterations0 = 0
@@ -843,7 +843,7 @@ def test_state_resets_between_decode_calls():
     decoder.decode(first_syndrome)
 
     assert decoder.solution_number == 0
-    assert decoder.total_iterations == 0
+    assert decoder.iterations == 0
     assert decoder.iter == 0
     assert not decoder.converge
     assert np.array_equal(
@@ -852,7 +852,7 @@ def test_state_resets_between_decode_calls():
     )
 
 
-def test_repeated_decodes_reset_total_iterations():
+def test_repeated_decodes_reset_iterations():
     parity_check = rep_code(3)
     n = parity_check.shape[1]
 
@@ -874,10 +874,10 @@ def test_repeated_decodes_reset_total_iterations():
     syndrome = np.array([1, 0], dtype=np.uint8)
 
     decoder.decode(syndrome)
-    first_total = decoder.total_iterations
+    first_total = decoder.iterations
 
     decoder.decode(syndrome)
-    second_total = decoder.total_iterations
+    second_total = decoder.iterations
 
     assert first_total > 0
     assert second_total == first_total

@@ -58,7 +58,6 @@ namespace ldpc::relay {
         // The winning result is written into the inherited `decoding` / `log_prob_ratios`
         // members at the end of bp_decode_parallel.
         int solution_number;
-        int total_iterations; // sum of BP iterations across every leg run
 
         int memory_seed;
 
@@ -100,7 +99,7 @@ namespace ldpc::relay {
                         memory_strengths_per_leg(std::move(memory_strengths_per_leg)), memory_seed(memory_seed)
         {
             this->solution_number = 0;
-            this->total_iterations = 0;
+            this->iterations = 0;
 
             if (!this->memory_strengths_per_leg.empty()) {
                 if (this->memory_strengths_per_leg.size() != static_cast<size_t>(this->maximum_legs)) {
@@ -196,7 +195,7 @@ namespace ldpc::relay {
             std::fill(this->decoding.begin(), this->decoding.end(), 0);
             std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
             this->solution_number = 0;
-            this->total_iterations = 0;
+            this->iterations = 0;
 
             // Tracks the best (lowest-weight, converged) solution seen so far across legs,
             // without needing to keep every leg's decoding/log_prob_ratios around.
@@ -206,7 +205,7 @@ namespace ldpc::relay {
             std::vector<double> best_log_prob_ratios(this->bit_count, 0.0);
 
             for (int leg = 0; leg < this->maximum_legs; leg++) {
-                this->iterations = 0;
+                int leg_iterations = 0;
                 this->converge = 0;
 
                 this->initialise_log_domain_bp_relay(leg);
@@ -326,7 +325,7 @@ namespace ldpc::relay {
                         this->converge = true;
                     }
 
-                    this->iterations = it;
+                    leg_iterations = it;
 
                     if (this->converge) {
                         this->solution_number += 1;
@@ -343,7 +342,7 @@ namespace ldpc::relay {
                     }
                 }
 
-                this->total_iterations += this->iterations;
+                this->iterations += leg_iterations;
 
                 if (this->converge) {
                     double weight = this->decoding_weight(this->decoding);

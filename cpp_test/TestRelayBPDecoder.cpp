@@ -114,7 +114,7 @@ TEST(RelayBpDecoder, InitializationWithExplicitMemoryStrengths) {
     EXPECT_EQ(memory_strengths, decoder.memory_strengths_per_leg);
 
     EXPECT_EQ(0, decoder.solution_number);
-    EXPECT_EQ(0, decoder.total_iterations);
+    EXPECT_EQ(0, decoder.iterations);
 }
 
 TEST(RelayBpDecoder, ExplicitMemoryMustHaveMaximumLegEntries) {
@@ -617,7 +617,6 @@ TEST(RelayBpDecoder, ProductSumSingleLegRepCode3) {
         EXPECT_EQ(expected[i], decoder.decode(syndromes[i]));
         EXPECT_TRUE(decoder.converge);
         EXPECT_EQ(1, decoder.solution_number);
-        EXPECT_EQ(decoder.iterations, decoder.total_iterations);
     }
 }
 
@@ -686,7 +685,6 @@ TEST(RelayBpDecoder, MaximumSolutionsStopsAfterFirstConvergence) {
 
     // An all-zero syndrome converges in the first iteration of leg 0.
     // Since maximum_solutions == 1, no later leg should execute.
-    EXPECT_EQ(1, decoder.total_iterations);
     EXPECT_EQ(1, decoder.iterations);
 
     EXPECT_EQ(vector<uint8_t>(n, 0), decoding);
@@ -717,8 +715,8 @@ TEST(RelayBpDecoder, MultipleLegsAccumulateTotalIterations) {
     auto syndrome = vector<uint8_t>{1, 1};
     auto decoding = decoder.decode(syndrome);
 
-    EXPECT_GT(decoder.total_iterations, 0);
-    EXPECT_LE(decoder.total_iterations, 80 + 60);
+    EXPECT_GT(decoder.iterations, 0);
+    EXPECT_LE(decoder.iterations, 80 + 60);
 
     if (decoder.solution_number > 0) {
         EXPECT_EQ(syndrome, pcm.mulvec(decoding));
@@ -758,8 +756,8 @@ TEST(RelayBpDecoder, MultipleLegsWithMemoryReturnValidConvergedResult) {
 
         ASSERT_GT(decoder.solution_number, 0);
         ASSERT_EQ(syndrome, pcm.mulvec(decoding));
-        EXPECT_GT(decoder.total_iterations, 0);
-        EXPECT_LE(decoder.total_iterations, 3 * 10);
+        EXPECT_GT(decoder.iterations, 0);
+        EXPECT_LE(decoder.iterations, 3 * 10);
     }
 }
 
@@ -791,7 +789,7 @@ TEST(RelayBpDecoder, StateIsResetBetweenDecodeCalls) {
 
     ASSERT_TRUE(decoder.converge);
     ASSERT_EQ(1, decoder.solution_number);
-    ASSERT_GT(decoder.total_iterations, 0);
+    ASSERT_GT(decoder.iterations, 0);
 
     // Prevent leg 0 from running any iterations during the next call.
     decoder.iterations0 = 0;
@@ -801,7 +799,6 @@ TEST(RelayBpDecoder, StateIsResetBetweenDecodeCalls) {
     EXPECT_FALSE(decoder.converge);
     EXPECT_EQ(0, decoder.solution_number);
     EXPECT_EQ(0, decoder.iterations);
-    EXPECT_EQ(0, decoder.total_iterations);
     EXPECT_EQ(vector<uint8_t>(n, 0), decoder.decoding);
 
     // initialise_log_domain_bp_relay(0) still initializes the LLR vectors
@@ -850,7 +847,6 @@ TEST(RelayBpDecoder, ZeroIterationLegsDoNotConverge) {
     EXPECT_FALSE(decoder.converge);
     EXPECT_EQ(0, decoder.solution_number);
     EXPECT_EQ(0, decoder.iterations);
-    EXPECT_EQ(0, decoder.total_iterations);
     EXPECT_EQ(vector<uint8_t>(n, 0), result);
 }
 
