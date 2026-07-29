@@ -80,7 +80,20 @@ cpp_modules = [
     "union_find_decoder",
     "bplsd_decoder",
     "lsd_decoder",
-    "relay_bp_decoder"
+    "relay_bp_decoder",
+    "aut_bp_decoder"
+]
+
+bliss_sources = [
+    "external/bliss/src/abstractgraph.cc",
+    "external/bliss/src/bliss_C.cc",
+    "external/bliss/src/defs.cc",
+    "external/bliss/src/digraph.cc",
+    "external/bliss/src/graph.cc",
+    "external/bliss/src/orbit.cc",
+    "external/bliss/src/partition.cc",
+    "external/bliss/src/uintseqhash.cc",
+    "external/bliss/src/utils.cc",
 ]
 
 c_extensions = []
@@ -90,10 +103,12 @@ for module in cpp_modules:
         f"src_python/ldpc/{module}/__init__.pyi",
     )
 
+    extra_sources = bliss_sources if module == "aut_bp_decoder" else []
+
     c_extensions.append(
         Extension(
             name=f"ldpc.{module}._{module}",
-            sources=[f"src_python/ldpc/{module}/_{module}.pyx"],
+            sources=[f"src_python/ldpc/{module}/_{module}.pyx"] + extra_sources,
             libraries=[],
             library_dirs=[],
             include_dirs=[
@@ -101,6 +116,7 @@ for module in cpp_modules:
                 "src_cpp",
                 "include/robin_map",
                 "include/ldpc/src_cpp",
+                "external/bliss/include"
             ],
             extra_compile_args=compile_flags,
             extra_link_args=extra_link_args,
