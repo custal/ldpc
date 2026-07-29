@@ -377,7 +377,13 @@ private:
         std::vector<double> o(a.size()); for(std::size_t j=0;j<o.size();++j)o[j]=a[p[j]]; return o;
     }
     static std::vector<std::uint8_t> permute_rows(const std::vector<std::uint8_t>& s,const Permutation& p) {
-        if(!p.old_row_for_new)return s; std::vector<std::uint8_t> o(s.size()); for(std::size_t j=0;j<o.size();++j)o[j]=s[(*p.old_row_for_new)[j]]&1u; return o;
+        if(!p.old_row_for_new)return s;
+        std::vector<std::uint8_t> o(s.size());
+        for(std::size_t new_row=0;new_row<o.size();++new_row) {
+            const std::size_t old_row = (*p.old_row_for_new)[new_row];
+            o[old_row] = s[new_row] &1u;
+        }
+        return o;
     }
     static std::vector<std::uint8_t> unpermute(const std::vector<std::uint8_t>& x,const std::vector<std::size_t>& p) {
         if(x.size()!=p.size())throw std::runtime_error("decoder result has wrong length"); std::vector<std::uint8_t> o(x.size()); for(std::size_t j=0;j<x.size();++j)o[p[j]]=x[j]&1u; return o;

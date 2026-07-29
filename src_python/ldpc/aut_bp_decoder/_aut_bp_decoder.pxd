@@ -125,12 +125,12 @@ cdef class AutBpDecoder:
     cdef double _gamma0
     cdef object _gamma_dist_interval
     cdef object _memory_strengths_per_leg
-    cdef int _bp_method
-    cdef int _schedule
+    cdef object _bp_method
+    cdef object _schedule
     cdef double _min_sum_scaling_factor
     cdef int _omp_threads
     cdef object _serial_schedule
     cdef int _random_schedule_seed
     cdef bint _random_serial_schedule
-    cdef int _bp_input_type
+    cdef object _bp_input_type
     cdef int _memory_seed

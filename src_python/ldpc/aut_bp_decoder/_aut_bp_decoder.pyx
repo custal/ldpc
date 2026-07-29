@@ -19,6 +19,99 @@ from libcpp.utility cimport move
 
 cimport cython
 
+cdef str _normalise_enum_string(object value, str parameter_name):
+    """Convert an enum-like Python value to a normalised string."""
+    if not isinstance(value, str):
+        raise TypeError(
+            f"{parameter_name} must be a string, "
+            f"not {type(value).__name__}"
+        )
+
+    return value.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+cdef BpMethod _bp_method_from_python(object value) except *:
+    cdef str normalised
+
+    # Also permit an already-converted enum value.
+    if isinstance(value, int):
+        if value == <int>BpMethod.MINIMUM_SUM:
+            return BpMethod.MINIMUM_SUM
+        if value == <int>BpMethod.PRODUCT_SUM:
+            return BpMethod.PRODUCT_SUM
+
+    normalised = _normalise_enum_string(value, "bp_method")
+
+    if normalised in ("minimum_sum", "min_sum", "minsum", "ms"):
+        return BpMethod.MINIMUM_SUM
+
+    if normalised in ("product_sum", "sum_product", "productsum", "ps"):
+        return BpMethod.PRODUCT_SUM
+
+    raise ValueError(
+        "bp_method must be one of "
+        "'minimum_sum' or 'product_sum'; "
+        f"received {value!r}"
+    )
+
+
+cdef BpSchedule _bp_schedule_from_python(object value) except *:
+    cdef str normalised
+
+    if isinstance(value, int):
+        if value == <int>BpSchedule.PARALLEL:
+            return BpSchedule.PARALLEL
+        if value == <int>BpSchedule.SERIAL:
+            return BpSchedule.SERIAL
+        if value == <int>BpSchedule.SERIAL_RELATIVE:
+            return BpSchedule.SERIAL_RELATIVE
+
+    normalised = _normalise_enum_string(value, "bp_schedule")
+
+    if normalised == "parallel":
+        return BpSchedule.PARALLEL
+
+    if normalised == "serial":
+        return BpSchedule.SERIAL
+
+    if normalised in ("serial_relative", "relative_serial"):
+        return BpSchedule.SERIAL_RELATIVE
+
+    raise ValueError(
+        "bp_schedule must be one of "
+        "'parallel', 'serial', or 'serial_relative'; "
+        f"received {value!r}"
+    )
+
+
+cdef BpInputType _bp_input_type_from_python(object value) except *:
+    cdef str normalised
+
+    if isinstance(value, int):
+        if value == <int>BpInputType.AUTO:
+            return BpInputType.AUTO
+        if value == <int>BpInputType.SYNDROME:
+            return BpInputType.SYNDROME
+        if value == <int>BpInputType.RECEIVED_VECTOR:
+            return BpInputType.RECEIVED_VECTOR
+
+    normalised = _normalise_enum_string(value, "bp_input_type")
+
+    if normalised == "auto":
+        return BpInputType.AUTO
+
+    if normalised == "syndrome":
+        return BpInputType.SYNDROME
+
+    if normalised in ("received_vector", "received"):
+        return BpInputType.RECEIVED_VECTOR
+
+    raise ValueError(
+        "bp_input_type must be one of "
+        "'auto', 'syndrome', or 'received_vector'; "
+        f"received {value!r}"
+    )
+
 
 cdef vector[double] _double_vector(object values):
     cdef vector[double] out
@@ -159,14 +252,14 @@ cdef class AutBpDecoder:
         double gamma0=0.0,
         gamma_dist_interval=(),
         memory_strengths_per_leg=(),
-        int bp_method=<int>MINIMUM_SUM,
-        int schedule=<int>PARALLEL,
+        object bp_method="minimum_sum",
+        object schedule="parallel",
         double min_sum_scaling_factor=1.0,
         int omp_threads=1,
         serial_schedule=(),
         int random_schedule_seed=0,
         bint random_serial_schedule=False,
-        int bp_input_type=<int>AUTO,
+        object bp_input_type="auto",
         int memory_seed=-1,
     ):
         cdef vector[double] c_priors
@@ -176,6 +269,14 @@ cdef class AutBpDecoder:
         cdef DecoderFactory factory
         cdef optional[size_t] c_maximum_solutions
         cdef object permutation_snapshot = None
+
+        cdef BpMethod c_bp_method
+        cdef BpSchedule c_schedule
+        cdef BpInputType c_bp_input_type
+
+        c_bp_method = _bp_method_from_python(bp_method)
+        c_schedule = _bp_schedule_from_python(schedule)
+        c_bp_input_type = _bp_input_type_from_python(bp_input_type)
 
         # Materialise iterable inputs once so generators are handled correctly.
         priors = tuple(priors)
@@ -216,14 +317,14 @@ cdef class AutBpDecoder:
         if decoder_type == "bp":
             factory = make_bp_factory(
                 maximum_iterations,
-                <BpMethod>bp_method,
-                <BpSchedule>schedule,
+                <BpMethod>c_bp_method,
+                <BpSchedule>c_schedule,
                 min_sum_scaling_factor,
                 omp_threads,
                 c_serial_schedule,
                 random_schedule_seed,
                 <cpp_bool>random_serial_schedule,
-                <BpInputType>bp_input_type,
+                <BpInputType>c_bp_input_type,
             )
         else:
             factory = make_relay_bp_factory(
@@ -234,14 +335,14 @@ cdef class AutBpDecoder:
                 gamma0,
                 _double_vector(gamma_dist_interval),
                 _double_matrix(memory_strengths_per_leg),
-                <BpMethod>bp_method,
-                <BpSchedule>schedule,
+                <BpMethod>c_bp_method,
+                <BpSchedule>c_schedule,
                 min_sum_scaling_factor,
                 omp_threads,
                 c_serial_schedule,
                 random_schedule_seed,
                 <cpp_bool>random_serial_schedule,
-                <BpInputType>bp_input_type,
+                <BpInputType>c_bp_input_type,
                 memory_seed,
             )
 
@@ -272,15 +373,37 @@ cdef class AutBpDecoder:
         self._memory_strengths_per_leg = tuple([
             tuple([float(x) for x in row]) for row in memory_strengths_per_leg
         ])
-        self._bp_method = bp_method
-        self._schedule = schedule
         self._min_sum_scaling_factor = min_sum_scaling_factor
         self._omp_threads = omp_threads
         self._serial_schedule = tuple([int(x) for x in serial_schedule])
         self._random_schedule_seed = random_schedule_seed
         self._random_serial_schedule = random_serial_schedule
-        self._bp_input_type = bp_input_type
         self._memory_seed = memory_seed
+
+        if c_bp_method == BpMethod.MINIMUM_SUM:
+            self._bp_method = "minimum_sum"
+        elif c_bp_method == BpMethod.PRODUCT_SUM:
+            self._bp_method = "product_sum"
+        else:
+            raise RuntimeError("unknown BpMethod value")
+
+        if c_schedule == BpSchedule.PARALLEL:
+            self._schedule = "parallel"
+        elif c_schedule == BpSchedule.SERIAL:
+            self._schedule = "serial"
+        elif c_schedule == BpSchedule.SERIAL_RELATIVE:
+            self._schedule = "serial_relative"
+        else:
+            raise RuntimeError("unknown BpSchedule value")
+
+        if c_bp_input_type == BpInputType.AUTO:
+            self._bp_input_type = "auto"
+        elif c_bp_input_type == BpInputType.SYNDROME:
+            self._bp_input_type = "syndrome"
+        elif c_bp_input_type == BpInputType.RECEIVED_VECTOR:
+            self._bp_input_type = "received_vector"
+        else:
+            raise RuntimeError("unknown BpInputType value")
 
     def decode(self, syndrome):
         cdef vector[uint8_t] c_syndrome

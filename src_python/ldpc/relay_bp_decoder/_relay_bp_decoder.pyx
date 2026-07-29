@@ -877,19 +877,11 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
         if(self.bpd.bp_input_type == SYNDROME or (self.bpd.bp_input_type == AUTO and len(input_vector)==self.m)):
             for i in range(len_input_vector):
                 self._syndrome[i] = input_vector[i]
-                if self._syndrome[i]: zero_input_vector = False
-            if zero_input_vector:
-                self.bpd.converge = True
-                return np.zeros(self.bit_count,dtype=DTYPE)
             self.bpd.decode(self._syndrome)
 
         elif(self.bpd.bp_input_type == RECEIVED_VECTOR or (self.bpd.bp_input_type == AUTO and len(input_vector)==self.n)):
             for i in range(len_input_vector):
                 self._received_vector[i] = input_vector[i]
-                if self._received_vector[i]: zero_input_vector = False
-            if zero_input_vector:
-                self.bpd.converge = True
-                return np.zeros(self.bit_count,dtype=DTYPE)
             self.bpd.decode(self._received_vector)
 
         out = np.zeros(self.n,dtype=DTYPE)

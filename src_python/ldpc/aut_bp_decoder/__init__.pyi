@@ -39,14 +39,14 @@ class AutBpDecoder:
         double gamma0=0.0,
         gamma_dist_interval=(),
         memory_strengths_per_leg=(),
-        int bp_method=<int>MINIMUM_SUM,
-        int schedule=<int>PARALLEL,
+        object bp_method="minimum_sum",
+        object schedule="parallel",
         double min_sum_scaling_factor=1.0,
         int omp_threads=1,
         serial_schedule=(),
         int random_schedule_seed=0,
         bint random_serial_schedule=False,
-        int bp_input_type=<int>AUTO,
+        object bp_input_type="auto",
         int memory_seed=-1,
     ): ...
 
