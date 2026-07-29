@@ -57,8 +57,8 @@ class AutBpDecoder:
     def bit_count(self): return self._pcm.get().n
     @property
     def priors(self): return self._priors
-    @property
-    def permutations(self):
+
+    def get_permutations(self):
         """All permutations actually used by the C++ decoder.
 
         This includes BLISS-discovered permutations in automatic mode and the
