@@ -281,7 +281,8 @@ public:
     }
 
     /* Convenience constructor: discover Tanner-graph automorphisms with BLISS,
-       then eagerly construct one permuted PCM and decoder per automorphism. */
+       then construct one decoder for the original PCM. Each automorphism acts on
+       the syndrome and returned decoder coordinates. */
     AutBpDecoder(const BpSparse& base_pcm, std::vector<double> priors,
                  DecoderFactory factory, std::size_t max_automorphisms,
                  std::optional<std::size_t> maximum_solutions=std::nullopt,
@@ -310,18 +311,25 @@ public:
         std::fill(this->decoding.begin(), this->decoding.end(), 0);
         std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
 
-        for (std::size_t k=0;k<members_.size();++k) {
-            auto s=permute_rows(syndrome,permutations_[k]);
-            auto correction=members_[k].decoder->decode(s);
-            stats_[k]={members_[k].decoder->iterations,members_[k].decoder->converge};
-            this->iterations += members_[k].decoder->iterations;
-            if (k==0) fallback=correction; this->log_prob_ratios=members_[k].decoder->log_prob_ratios;
+        for (std::size_t k=0;k<permutations_.size();++k) {
+            auto s=map_syndrome_to_decoder_coordinates(syndrome,permutations_[k]);
+            auto x=decoder_->decode(s);
+            auto correction = map_decoder_output_to_original_coordinates(
+                x, permutations_[k].old_col_for_new);
+            auto candidate_log_prob_ratios = map_decoder_output_to_original_coordinates(
+                decoder_->log_prob_ratios, permutations_[k].old_col_for_new);
+            stats_[k]={decoder_->iterations,decoder_->converge};
+            this->iterations += decoder_->iterations;
+            if (k==0) {
+                fallback=correction;
+                this->log_prob_ratios=candidate_log_prob_ratios;
+            }
             if (base_pcm_->mulvec(correction)!=syndrome) continue;
             ++this->solution_number;
             this->converge=true;
             double score=log_likelihood(correction);
             if (best.empty() || score>best_score) { best=std::move(correction); best_score=score;
-                this->log_prob_ratios=members_[k].decoder->log_prob_ratios;}
+                this->log_prob_ratios=std::move(candidate_log_prob_ratios);}
             if (maximum_solutions_ && this->solution_number>=*maximum_solutions_) break;
         }
         if (!best.empty()) this->decoding = best;
@@ -334,12 +342,12 @@ public:
     const std::vector<Permutation>& permutations() const noexcept { return permutations_; }
 
 private:
-    struct Member { std::unique_ptr<BpSparse> pcm; std::unique_ptr<BpDecoder> decoder; };
     std::unique_ptr<BpSparse> base_pcm_;
     std::vector<double> priors_;
     std::vector<Permutation> permutations_;
     std::optional<std::size_t> maximum_solutions_;
-    std::vector<Member> members_;
+    // One fixed decoder; permutations only transform its syndrome and outputs.
+    std::unique_ptr<BpDecoder> decoder_;
     std::vector<MemberStats> stats_;
 
     void initialise(DecoderFactory factory) {
@@ -347,36 +355,30 @@ private:
         if(permutations_.empty()) throw std::invalid_argument("permutations must be non-empty");
         if(priors_.size()!=static_cast<std::size_t>(base_pcm_->n)) throw std::invalid_argument("priors length must equal H.n");
         if(maximum_solutions_ && *maximum_solutions_==0) throw std::invalid_argument("maximum_solutions must be positive");
-        members_.reserve(permutations_.size()); stats_.resize(permutations_.size());
+
         for(const auto& p:permutations_) {
             validate_perm(p.old_col_for_new,base_pcm_->n);
             if(p.old_row_for_new) validate_perm(*p.old_row_for_new,base_pcm_->m);
-            Member m; m.pcm=make_member_matrix(*base_pcm_,p);
-            m.decoder=factory(*m.pcm,permute_priors(priors_,p.old_col_for_new)); // TODO: Should I be permuting priors?
-            if(!m.decoder) throw std::runtime_error("decoder factory returned null");
-            members_.push_back(std::move(m));
         }
+
+        // The ensemble reuses one decoder on the original PCM and prior order.
+        // Each permutation acts only on the syndrome and decoder outputs.
+        decoder_=factory(*base_pcm_,priors_);
+        if(!decoder_) throw std::runtime_error("decoder factory returned null");
+        stats_.resize(permutations_.size());
     }
     static void validate_perm(const std::vector<std::size_t>& p,std::size_t n) {
         if(p.size()!=n) throw std::invalid_argument("permutation has wrong size");
         std::vector<bool> seen(n,false); for(auto x:p) { if(x>=n||seen[x]) throw std::invalid_argument("invalid permutation"); seen[x]=true; }
     }
+
     static std::unique_ptr<BpSparse> clone_matrix(const BpSparse& src) {
         auto out=std::make_unique<BpSparse>(src.m,src.n); auto& s=const_cast<BpSparse&>(src);
         for(int r=0;r<src.m;++r) for(auto& e:s.iterate_row(r)) out->insert_entry(e.row_index,e.col_index);
         return out;
     }
-    static std::unique_ptr<BpSparse> make_member_matrix(const BpSparse& h,const Permutation& p) {
-        auto out=std::make_unique<BpSparse>(h.m,h.n);
-        std::vector<std::size_t> nc(p.old_col_for_new.size());
-        for(std::size_t j=0;j<p.old_col_for_new.size();++j) nc[p.old_col_for_new[j]]=j;
-        auto& s=const_cast<BpSparse&>(h); for(int r=0;r<h.m;++r) for(auto& e:s.iterate_row(r)) out->insert_entry(e.row_index,nc[e.col_index]);
-        return out;
-    }
-    static std::vector<double> permute_priors(const std::vector<double>& a,const std::vector<std::size_t>& p) {
-        std::vector<double> o(a.size()); for(std::size_t j=0;j<o.size();++j)o[j]=a[p[j]]; return o;
-    }
-    static std::vector<std::uint8_t> permute_rows(const std::vector<std::uint8_t>& s,const Permutation& p) {
+
+    static std::vector<std::uint8_t> map_syndrome_to_decoder_coordinates(const std::vector<std::uint8_t>& s,const Permutation& p) {
         if(!p.old_row_for_new)return s;
         std::vector<std::uint8_t> o(s.size());
         for(std::size_t new_row=0;new_row<o.size();++new_row) {
@@ -385,8 +387,19 @@ private:
         }
         return o;
     }
-    static std::vector<std::uint8_t> unpermute(const std::vector<std::uint8_t>& x,const std::vector<std::size_t>& p) {
-        if(x.size()!=p.size())throw std::runtime_error("decoder result has wrong length"); std::vector<std::uint8_t> o(x.size()); for(std::size_t j=0;j<x.size();++j)o[p[j]]=x[j]&1u; return o;
+
+    template<typename T> // Template as same mapping used for correction <uint8_t> and log_prob_ratios <double>
+    static std::vector<T> map_decoder_output_to_original_coordinates(
+        const std::vector<T>& decoder_output,
+        const std::vector<std::size_t>& old_col_for_new) {
+        if(decoder_output.size()!=old_col_for_new.size())
+            throw std::runtime_error("decoder output has wrong length");
+        std::vector<T> original_output(decoder_output.size());
+        for(std::size_t new_col=0;new_col<original_output.size();++new_col) {
+            const std::size_t old_col=old_col_for_new[new_col];
+            original_output[new_col]=decoder_output[old_col];
+        }
+        return original_output;
     }
     double log_likelihood(const std::vector<std::uint8_t>& e) const {
         double z=0; for(std::size_t i=0;i<e.size();++i){double p=priors_[i]; if(!(p>=0&&p<=1))throw std::domain_error("prior outside [0,1]"); z+=e[i]?std::log(p):std::log1p(-p);} return z;
