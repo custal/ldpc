@@ -312,7 +312,9 @@ public:
         std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
 
         for (std::size_t k=0;k<permutations_.size();++k) {
-            auto s=map_syndrome_to_decoder_coordinates(syndrome,permutations_[k]);
+            auto s = map_syndrome_to_decoder_coordinates(syndrome, permutations_[k]);
+            decoder_->channel_probabilities = map_channel_probabilities_to_decoder_coordinates(priors_,
+                permutations_[k].old_col_for_new);
             auto x=decoder_->decode(s);
             auto correction = map_decoder_output_to_original_coordinates(
                 x, permutations_[k].old_col_for_new);
@@ -332,6 +334,7 @@ public:
                 this->log_prob_ratios=std::move(candidate_log_prob_ratios);}
             if (maximum_solutions_ && this->solution_number>=*maximum_solutions_) break;
         }
+        decoder_->channel_probabilities = priors_;
         if (!best.empty()) this->decoding = best;
         else if (!fallback.empty()) this->decoding = fallback;
         else this->decoding = std::vector<std::uint8_t>(priors_.size(),0);
@@ -396,11 +399,25 @@ private:
             throw std::runtime_error("decoder output has wrong length");
         std::vector<T> original_output(decoder_output.size());
         for(std::size_t new_col=0;new_col<original_output.size();++new_col) {
-            const std::size_t old_col=old_col_for_new[new_col];
-            original_output[new_col]=decoder_output[old_col];
+            const std::size_t old_col = old_col_for_new[new_col];
+            original_output[new_col] = decoder_output[old_col];
         }
         return original_output;
     }
+
+    static std::vector<double> map_channel_probabilities_to_decoder_coordinates(
+        const std::vector<double>& original_channel_probabilities,
+        const std::vector<std::size_t>& old_col_for_new) {
+        if(original_channel_probabilities.size()!=old_col_for_new.size())
+            throw std::runtime_error("decoder input has wrong length");
+        std::vector<double> decoder_channel_probabilities(original_channel_probabilities.size());
+        for(std::size_t new_col=0;new_col<decoder_channel_probabilities.size();++new_col) {
+            const std::size_t old_col = old_col_for_new[new_col];
+            decoder_channel_probabilities[old_col] = original_channel_probabilities[new_col];
+        }
+        return decoder_channel_probabilities;
+    }
+
     double log_likelihood(const std::vector<std::uint8_t>& e) const {
         double z=0; for(std::size_t i=0;i<e.size();++i){double p=priors_[i]; if(!(p>=0&&p<=1))throw std::domain_error("prior outside [0,1]"); z+=e[i]?std::log(p):std::log1p(-p);} return z;
     }
