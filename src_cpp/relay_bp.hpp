@@ -298,8 +298,14 @@ namespace ldpc::relay {
                     for (int i = 0; i < this->bit_count; i++) {
 
                         double temp; //Implement DMem-BP
-                        temp = (1 - memory_strengths[i]) * this->initial_log_prob_ratios[i] +
-                            memory_strengths[i] * this->log_prob_ratios[i];
+                        // elif statements to catch edge case of infinite log prob ratios and zero memory returning nan when multiplied
+                        if (memory_strengths[i] == 0.0)
+                            temp = this->initial_log_prob_ratios[i];
+                        else if (memory_strengths[i] == 1.0)
+                            temp = this->log_prob_ratios[i];
+                        else
+                            temp = (1 - memory_strengths[i]) * this->initial_log_prob_ratios[i] +
+                                memory_strengths[i] * this->log_prob_ratios[i];
                         for (auto &e: this->pcm.iterate_column(i)) {
                             e.bit_to_check_msg = temp;
                             temp += e.check_to_bit_msg;

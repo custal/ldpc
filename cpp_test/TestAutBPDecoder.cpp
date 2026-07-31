@@ -60,6 +60,7 @@ AutBpDecoder make_rep_autbp(
     std::optional<size_t> maximum_solutions = std::nullopt,
     int maximum_iterations = 10
 ) {
+    // rep decoder only has these two permutations
     vector<Permutation> permutations{
         identity_permutation(static_cast<size_t>(pcm.n),
                              static_cast<size_t>(pcm.m)),
@@ -502,6 +503,31 @@ TEST(AutBpGraphAutomorphisms, DiscoveryIncludesIdentityAndProducesValidMaps) {
     ASSERT_TRUE(automorphisms[0].old_row_for_new.has_value());
     EXPECT_EQ((vector<size_t>{1, 0}),
               *automorphisms[1].old_row_for_new);
+}
+
+TEST(AutBpDecoder, PermutingPriorsBeforeDecodingIsCorrectOperation) {
+    const int n = 3;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+    // Choose extreme priors which will only converge if priors are appropriately permuted
+    auto decoder = make_rep_autbp(pcm, vector<double>{0, 0, 1});
+
+    // Expect this to be decoded to an error on the far right bit
+    const vector<uint8_t> syndrome1 {0,1};
+    vector<uint8_t> expected {0,0,1};
+
+    auto result1 = decoder.decode(syndrome1);
+    auto last_member_stats1 = decoder.last_member_stats();
+    EXPECT_EQ(expected, result1);
+    EXPECT_EQ(last_member_stats1[0].converged, true);
+    EXPECT_EQ(last_member_stats1[1].converged, true);
+
+    // Expect this not to converge.
+    const vector<uint8_t> syndrome2 = {1,0};
+
+    auto result2 = decoder.decode(syndrome2);
+    auto last_member_stats = decoder.last_member_stats();
+    EXPECT_EQ(last_member_stats[0].converged, false);
+    EXPECT_EQ(last_member_stats[1].converged, false);
 }
 
 int main(int argc, char** argv) {
