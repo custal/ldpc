@@ -17,7 +17,7 @@ class AutBpDecoder:
 
     Supply either ``max_automorphisms`` for BLISS discovery or ``permutations``
     for a predefined sequence. Each predefined item is a dict with
-    ``old_col_for_new`` and optional ``old_row_for_new``, or a ``(cols, rows)``
+    ``old_col_for_new`` and ``old_row_for_new``, or a ``(cols, rows)``
     pair. ``decoder_type`` is either ``"relay"`` (default) or ``"bp"``. Relay-only
     arguments are retained as properties even when the plain BP factory is
     selected, making the complete construction configuration inspectable.

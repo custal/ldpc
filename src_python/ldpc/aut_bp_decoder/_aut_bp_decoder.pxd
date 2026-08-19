@@ -38,7 +38,7 @@ cdef extern from "autbp.cpp" namespace "ldpc::autbp":
     cdef cppclass Permutation "ldpc::autbp::Permutation":
         Permutation() except +
         vector[size_t] old_col_for_new
-        optional[vector[size_t]] old_row_for_new
+        vector[size_t] old_row_for_new
 
     cdef cppclass MemberStats "ldpc::autbp::MemberStats":
         int iterations

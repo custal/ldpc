@@ -32,7 +32,7 @@ Permutation identity_permutation(size_t n, size_t m) {
     p.old_col_for_new.resize(n);
     p.old_row_for_new = vector<size_t>(m);
     for (size_t i = 0; i < n; ++i) p.old_col_for_new[i] = i;
-    for (size_t i = 0; i < m; ++i) (*p.old_row_for_new)[i] = i;
+    for (size_t i = 0; i < m; ++i) p.old_row_for_new[i] = i;
     return p;
 }
 
@@ -44,7 +44,7 @@ Permutation reversal_permutation(size_t n, size_t m) {
     p.old_col_for_new.resize(n);
     p.old_row_for_new = vector<size_t>(m);
     for (size_t j = 0; j < n; ++j) p.old_col_for_new[j] = n - 1 - j;
-    for (size_t j = 0; j < m; ++j) (*p.old_row_for_new)[j] = m - 1 - j;
+    for (size_t j = 0; j < m; ++j) p.old_row_for_new[j] = m - 1 - j;
     return p;
 }
 
@@ -139,8 +139,7 @@ TEST(AutBpGraphAutomorphisms, SplitTannerPermutationBuildsInverseMaps) {
     const auto p = ldpc::autbp::graph_automorphisms::split_tanner_permutation(
         image, 3, 2);
     EXPECT_EQ((vector<size_t>{2, 0, 1}), p.old_col_for_new);
-    ASSERT_TRUE(p.old_row_for_new.has_value());
-    EXPECT_EQ((vector<size_t>{1, 0}), *p.old_row_for_new);
+    EXPECT_EQ((vector<size_t>{1, 0}), p.old_row_for_new);
 }
 
 TEST(AutBpGraphAutomorphisms, SplitTannerPermutationRejectsWrongSizeOrMixedColors) {
@@ -216,15 +215,15 @@ TEST(AutBpDecoder, RejectsWrongSizedDuplicateAndOutOfRangeColumnPermutations) {
     auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(3);
     const auto factory = basic_bp_factory();
 
-    Permutation wrong_size{{0, 1}, std::nullopt};
+    Permutation wrong_size{{0, 1}, {0, 1}};
     EXPECT_THROW(AutBpDecoder(pcm, vector<double>(3, 0.1), {wrong_size}, factory),
                  std::invalid_argument);
 
-    Permutation duplicate{{0, 0, 2}, std::nullopt};
+    Permutation duplicate{{0, 0, 2}, {0, 1}};
     EXPECT_THROW(AutBpDecoder(pcm, vector<double>(3, 0.1), {duplicate}, factory),
                  std::invalid_argument);
 
-    Permutation out_of_range{{0, 1, 3}, std::nullopt};
+    Permutation out_of_range{{0, 1, 3}, {0, 1}};
     EXPECT_THROW(AutBpDecoder(pcm, vector<double>(3, 0.1), {out_of_range}, factory),
                  std::invalid_argument);
 }
@@ -493,16 +492,14 @@ TEST(AutBpGraphAutomorphisms, DiscoveryIncludesIdentityAndProducesValidMaps) {
     ASSERT_FALSE(automorphisms.empty());
     EXPECT_EQ((vector<size_t>{0, 1, 2}),
               automorphisms[0].old_col_for_new);
-    ASSERT_TRUE(automorphisms[0].old_row_for_new.has_value());
     EXPECT_EQ((vector<size_t>{0, 1}),
-              *automorphisms[0].old_row_for_new);
+              automorphisms[0].old_row_for_new);
 
     // Expected permutation for 3 bit repetition code
     EXPECT_EQ((vector<size_t>{2, 1, 0}),
               automorphisms[1].old_col_for_new);
-    ASSERT_TRUE(automorphisms[0].old_row_for_new.has_value());
     EXPECT_EQ((vector<size_t>{1, 0}),
-              *automorphisms[1].old_row_for_new);
+              automorphisms[1].old_row_for_new);
 }
 
 TEST(AutBpDecoder, PermutingPriorsBeforeDecodingIsCorrectOperation) {

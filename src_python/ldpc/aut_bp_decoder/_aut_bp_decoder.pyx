@@ -161,8 +161,10 @@ cdef vector[Permutation] _permutation_vector(object specifications) except *:
         if isinstance(specification, dict):
             if "old_col_for_new" not in specification:
                 raise ValueError("each permutation dict requires old_col_for_new")
+            if "old_row_for_new" not in specification:
+                raise ValueError("each permutation dict requires old_row_for_new")
             columns = specification["old_col_for_new"]
-            rows = specification.get("old_row_for_new", None)
+            rows = specification["old_row_for_new"]
         else:
             try:
                 columns, rows = specification
@@ -172,12 +174,12 @@ cdef vector[Permutation] _permutation_vector(object specifications) except *:
                     "(old_col_for_new, old_row_for_new) pair"
                 )
 
+        if rows is None:
+            raise ValueError("old_row_for_new must not be None")
+
         permutation = Permutation()
         permutation.old_col_for_new = _size_t_vector(columns)
-        if rows is not None:
-            permutation.old_row_for_new = optional[vector[size_t]](
-                _size_t_vector(rows)
-            )
+        permutation.old_row_for_new = _size_t_vector(rows)
         out.push_back(permutation)
     return out
 
@@ -187,13 +189,19 @@ def _normalise_permutations(object specifications):
     normalised = []
     for specification in specifications:
         if isinstance(specification, dict):
+            if "old_col_for_new" not in specification:
+                raise ValueError("each permutation dict requires old_col_for_new")
+            if "old_row_for_new" not in specification:
+                raise ValueError("each permutation dict requires old_row_for_new")
             columns = specification["old_col_for_new"]
-            rows = specification.get("old_row_for_new", None)
+            rows = specification["old_row_for_new"]
         else:
             columns, rows = specification
+        if rows is None:
+            raise ValueError("old_row_for_new must not be None")
         normalised.append((
             tuple([int(x) for x in columns]),
-            None if rows is None else tuple([int(x) for x in rows]),
+            tuple([int(x) for x in rows]),
         ))
     return tuple(normalised)
 
@@ -230,7 +238,7 @@ cdef class AutBpDecoder:
 
     Supply either ``max_automorphisms`` for BLISS discovery or ``permutations``
     for a predefined sequence. Each predefined item is a dict with
-    ``old_col_for_new`` and optional ``old_row_for_new``, or a ``(cols, rows)``
+    ``old_col_for_new`` and ``old_row_for_new``, or a ``(cols, rows)``
     pair. ``decoder_type`` is either ``"relay"`` (default) or ``"bp"``. Relay-only
     arguments are retained as properties even when the plain BP factory is
     selected, making the complete construction configuration inspectable.
@@ -449,12 +457,9 @@ cdef class AutBpDecoder:
             n_cols = col_vec.size()
             columns = tuple([int(col_vec[0][j]) for j in range(n_cols)])
 
-            if permutation.old_row_for_new.has_value():
-                row_vec = &permutation.old_row_for_new.value()
-                n_rows = row_vec.size()
-                rows = tuple([int(row_vec[0][j]) for j in range(n_rows)])
-            else:
-                rows = None
+            row_vec = &permutation.old_row_for_new
+            n_rows = row_vec.size()
+            rows = tuple([int(row_vec[0][j]) for j in range(n_rows)])
 
             result.append((columns, rows))
         return tuple(result)

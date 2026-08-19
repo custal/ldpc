@@ -29,7 +29,7 @@ using BpSparse = ldpc::bp::BpSparse;
    old_row_for_new has the equivalent convention for rows. */
 struct Permutation {
     std::vector<std::size_t> old_col_for_new;
-    std::optional<std::vector<std::size_t>> old_row_for_new;
+    std::vector<std::size_t> old_row_for_new;
 };
 struct MemberStats { int iterations = -1; bool converged = false; };
 using DecoderFactory = std::function<std::unique_ptr<BpDecoder>(BpSparse&, std::vector<double>)>;
@@ -313,15 +313,10 @@ public:
 
         for (std::size_t k=0;k<permutations_.size();++k) {
             auto s = map_syndrome_to_decoder_coordinates(syndrome, permutations_[k]);
-            decoder_->channel_probabilities = map_channel_probabilities_to_decoder_coordinates(priors_,
-                permutations_[k].old_col_for_new);
-            auto x=decoder_->decode(s);
-            auto correction = map_decoder_output_to_original_coordinates(
-                x, permutations_[k].old_col_for_new);
-            auto candidate_log_prob_ratios = map_decoder_output_to_original_coordinates(
-                decoder_->log_prob_ratios, permutations_[k].old_col_for_new);
-            stats_[k]={decoder_->iterations,decoder_->converge};
-            this->iterations += decoder_->iterations;
+            auto correction=decoders_[k]->decode(s);
+            auto candidate_log_prob_ratios=decoders_[k]->log_prob_ratios;
+            stats_[k]={decoders_[k]->iterations,decoders_[k]->converge};
+            this->iterations += decoders_[k]->iterations;
             if (k==0) {
                 fallback=correction;
                 this->log_prob_ratios=candidate_log_prob_ratios;
@@ -334,7 +329,6 @@ public:
                 this->log_prob_ratios=std::move(candidate_log_prob_ratios);}
             if (maximum_solutions_ && this->solution_number>=*maximum_solutions_) break;
         }
-        decoder_->channel_probabilities = priors_;
         if (!best.empty()) this->decoding = best;
         else if (!fallback.empty()) this->decoding = fallback;
         else this->decoding = std::vector<std::uint8_t>(priors_.size(),0);
@@ -349,8 +343,8 @@ private:
     std::vector<double> priors_;
     std::vector<Permutation> permutations_;
     std::optional<std::size_t> maximum_solutions_;
-    // One fixed decoder; permutations only transform its syndrome and outputs.
-    std::unique_ptr<BpDecoder> decoder_;
+    std::vector<std::unique_ptr<BpSparse>> permuted_pcms_;
+    std::vector<std::unique_ptr<BpDecoder>> decoders_;
     std::vector<MemberStats> stats_;
 
     void initialise(DecoderFactory factory) {
@@ -361,13 +355,22 @@ private:
 
         for(const auto& p:permutations_) {
             validate_perm(p.old_col_for_new,base_pcm_->n);
-            if(p.old_row_for_new) validate_perm(*p.old_row_for_new,base_pcm_->m);
+            validate_perm(p.old_row_for_new,base_pcm_->m);
         }
 
-        // The ensemble reuses one decoder on the original PCM and prior order.
-        // Each permutation acts only on the syndrome and decoder outputs.
-        decoder_=factory(*base_pcm_,priors_);
-        if(!decoder_) throw std::runtime_error("decoder factory returned null");
+        // We create a new decoder instance for each permutation. An alternative approach is to have a single decoder
+        // instance then unpermute the correction however this requires the row permutations have a corresponding column
+        // permutation which is only the case for code automorphisms. We want to allow for row permutations which are
+        // not necessarily code automorphisms
+        permuted_pcms_.reserve(permutations_.size());
+        decoders_.reserve(permutations_.size());
+        for(const auto& p:permutations_) {
+            auto permuted_pcm=permute_matrix_rows(*base_pcm_,p.old_row_for_new);
+            auto decoder=factory(*permuted_pcm,priors_);
+            if(!decoder) throw std::runtime_error("decoder factory returned null");
+            permuted_pcms_.push_back(std::move(permuted_pcm));
+            decoders_.push_back(std::move(decoder));
+        }
         stats_.resize(permutations_.size());
     }
     static void validate_perm(const std::vector<std::size_t>& p,std::size_t n) {
@@ -381,41 +384,21 @@ private:
         return out;
     }
 
+    static std::unique_ptr<BpSparse> permute_matrix_rows(const BpSparse& src,const std::vector<std::size_t>& old_row_for_new) {
+        auto out=std::make_unique<BpSparse>(src.m,src.n); auto& s=const_cast<BpSparse&>(src);
+        for(std::size_t new_row=0;new_row<old_row_for_new.size();++new_row)
+            for(auto& e:s.iterate_row(static_cast<int>(old_row_for_new[new_row])))
+                out->insert_entry(static_cast<int>(new_row),e.col_index);
+        return out;
+    }
+
     static std::vector<std::uint8_t> map_syndrome_to_decoder_coordinates(const std::vector<std::uint8_t>& s,const Permutation& p) {
-        if(!p.old_row_for_new)return s;
         std::vector<std::uint8_t> o(s.size());
         for(std::size_t new_row=0;new_row<o.size();++new_row) {
-            const std::size_t old_row = (*p.old_row_for_new)[new_row];
-            o[old_row] = s[new_row] &1u;
+            const std::size_t old_row = p.old_row_for_new[new_row];
+            o[new_row] = s[old_row] &1u;
         }
         return o;
-    }
-
-    template<typename T> // Template as same mapping used for correction <uint8_t> and log_prob_ratios <double>
-    static std::vector<T> map_decoder_output_to_original_coordinates(
-        const std::vector<T>& decoder_output,
-        const std::vector<std::size_t>& old_col_for_new) {
-        if(decoder_output.size()!=old_col_for_new.size())
-            throw std::runtime_error("decoder output has wrong length");
-        std::vector<T> original_output(decoder_output.size());
-        for(std::size_t new_col=0;new_col<original_output.size();++new_col) {
-            const std::size_t old_col = old_col_for_new[new_col];
-            original_output[new_col] = decoder_output[old_col];
-        }
-        return original_output;
-    }
-
-    static std::vector<double> map_channel_probabilities_to_decoder_coordinates(
-        const std::vector<double>& original_channel_probabilities,
-        const std::vector<std::size_t>& old_col_for_new) {
-        if(original_channel_probabilities.size()!=old_col_for_new.size())
-            throw std::runtime_error("decoder input has wrong length");
-        std::vector<double> decoder_channel_probabilities(original_channel_probabilities.size());
-        for(std::size_t new_col=0;new_col<decoder_channel_probabilities.size();++new_col) {
-            const std::size_t old_col = old_col_for_new[new_col];
-            decoder_channel_probabilities[old_col] = original_channel_probabilities[new_col];
-        }
-        return decoder_channel_probabilities;
     }
 
     double log_likelihood(const std::vector<std::uint8_t>& e) const {

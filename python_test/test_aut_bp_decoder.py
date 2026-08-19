@@ -149,18 +149,6 @@ def test_permutation_accepts_pair_and_dict_forms():
     assert decoder.get_permutations() == (IDENTITY, SWAP_01)
 
 
-def test_permutation_rows_are_optional():
-    decoder = make_decoder(
-        permutations=[{"old_col_for_new": (0, 1, 2)}]
-    )
-    assert decoder.get_permutations() == (((0, 1, 2), None),)
-
-
-def test_permutation_dict_requires_columns():
-    with pytest.raises(KeyError, match="old_col_for_new"):
-        make_decoder(permutations=[{"old_row_for_new": (0, 1)}])
-
-
 @pytest.mark.parametrize(
     "permutations",
     [
@@ -224,14 +212,14 @@ def test_bp_configuration_roundtrip():
     )
     assert decoder.decoder_type == "bp"
     assert decoder.maximum_iterations == 7
-    assert decoder.bp_method == 0
-    assert decoder.schedule == 0
+    assert decoder.bp_method == "product_sum"
+    assert decoder.schedule == "serial"
     assert decoder.min_sum_scaling_factor == pytest.approx(0.625)
     assert decoder.omp_threads == 2
     assert decoder.serial_schedule == (2, 0, 1)
     assert decoder.random_schedule_seed == 123
     assert decoder.random_serial_schedule is False
-    assert decoder.bp_input_type == 0
+    assert decoder.bp_input_type == "syndrome"
 
 
 def test_relay_configuration_roundtrip():
