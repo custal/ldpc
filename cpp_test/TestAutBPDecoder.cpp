@@ -430,7 +430,7 @@ TEST(AutBpDecoder, PublicDecodeAttributesAggregateAndResetBetweenCalls) {
     EXPECT_EQ(first_result, decoder.decoding);
     EXPECT_TRUE(decoder.converge);
     EXPECT_EQ(2u, decoder.solution_number);
-    EXPECT_EQ(first_stats[0].iterations + first_stats[1].iterations,
+    EXPECT_EQ(std::max(first_stats[0].iterations, first_stats[1].iterations),
               decoder.iterations);
     EXPECT_EQ(static_cast<size_t>(n), decoder.log_prob_ratios.size());
 
@@ -445,7 +445,7 @@ TEST(AutBpDecoder, PublicDecodeAttributesAggregateAndResetBetweenCalls) {
     EXPECT_EQ(second_syndrome, pcm.mulvec(decoder.decoding));
     EXPECT_TRUE(decoder.converge);
     EXPECT_EQ(2u, decoder.solution_number);
-    EXPECT_EQ(second_stats[0].iterations + second_stats[1].iterations,
+    EXPECT_EQ(std::max(second_stats[0].iterations, second_stats[1].iterations),
               decoder.iterations);
     EXPECT_EQ(static_cast<size_t>(n), decoder.log_prob_ratios.size());
 }

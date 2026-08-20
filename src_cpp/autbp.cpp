@@ -316,7 +316,6 @@ public:
             auto correction=decoders_[k]->decode(s);
             auto candidate_log_prob_ratios=decoders_[k]->log_prob_ratios;
             stats_[k]={decoders_[k]->iterations,decoders_[k]->converge};
-            this->iterations += decoders_[k]->iterations;
             if (k==0) {
                 fallback=correction;
                 this->log_prob_ratios=candidate_log_prob_ratios;
@@ -327,11 +326,15 @@ public:
             double score=log_likelihood(correction);
             if (best.empty() || score>best_score) { best=std::move(correction); best_score=score;
                 this->log_prob_ratios=std::move(candidate_log_prob_ratios);}
+            // We count the iterations assuming autbp is executing in parallel, in which case the effective number of
+            // iterations is whichever converged ensemble member took the longest
+            if (decoders_[k]->iterations > this->iterations) this->iterations = decoders_[k]->iterations;
             if (maximum_solutions_ && this->solution_number>=*maximum_solutions_) break;
         }
         if (!best.empty()) this->decoding = best;
         else if (!fallback.empty()) this->decoding = fallback;
         else this->decoding = std::vector<std::uint8_t>(priors_.size(),0);
+        if (!this->converge) this->iterations=decoders_[0]->maximum_iterations;
         return this->decoding;
     }
 
