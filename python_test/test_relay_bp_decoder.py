@@ -633,10 +633,10 @@ def test_decode_zero_syndrome_updates_relay_state():
     decoder.decode(syndrome)
 
     assert decoder.converge
-    # a zero syndrome is handled by the cython wrapper without calling the C++ object so we do not expect these values to increase
-    assert decoder.solution_number == 0
-    assert decoder.iter == 0
-    assert decoder.iterations == 0
+    # a zero syndrome is no longer handled by the cython wrapper without calling the C++ object so we do expect these values to increase
+    assert decoder.solution_number == 1
+    assert decoder.iter == 1
+    assert decoder.iterations == 1
 
 
 def test_decode_output_shape():
