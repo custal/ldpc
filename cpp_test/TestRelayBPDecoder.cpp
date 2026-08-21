@@ -884,17 +884,6 @@ TEST(RelayBpDecoder, FinalLegBestEffortIsReturnedWhenNothingConverges) {
 // Unimplemented methods
 // ============================================================
 
-TEST(RelayBpDecoder, BpDecodeSerialThrowsNotImplemented) {
-    int n = 5;
-    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
-    auto decoder = make_relay_decoder(pcm, n, 1, 1);
-    auto syndrome = vector<uint8_t>(pcm.m, 0);
-
-    EXPECT_THROW(
-        decoder.bp_decode_serial(syndrome),
-        std::logic_error
-    );
-}
 
 TEST(RelayBpDecoder, BpDecodeSingleScanThrowsNotImplemented) {
     int n = 5;

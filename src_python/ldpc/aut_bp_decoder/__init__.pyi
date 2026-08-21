@@ -8,6 +8,10 @@ from libcpp.utility import move
 import cython
 
 
+def _normalise_serial_schedules(object schedules):
+    """Create an immutable Python snapshot of member schedule overrides."""
+
+
 def _normalise_permutations(object specifications):
     """Return a stable, immutable Python snapshot of permutation inputs."""
 
@@ -15,12 +19,15 @@ def _normalise_permutations(object specifications):
 class AutBpDecoder:
     """Python owner for ``ldpc::autbp::AutBpDecoder``.
 
-    Supply either ``max_automorphisms`` for BLISS discovery or ``permutations``
-    for a predefined sequence. Each predefined item is a dict with
-    ``old_col_for_new`` and ``old_row_for_new``, or a ``(cols, rows)``
-    pair. ``decoder_type`` is either ``"relay"`` (default) or ``"bp"``. Relay-only
-    arguments are retained as properties even when the plain BP factory is
-    selected, making the complete construction configuration inspectable.
+    Supply either ``max_automorphisms`` for BLISS discovery or
+    ``permutations`` for a predefined sequence.
+
+    ``serial_schedule`` is the factory-level fallback schedule.
+    ``serial_schedules`` optionally supplies one override per permutation.
+    Each override may be ``None`` to use ``serial_schedule``, or an iterable
+    containing that member's complete bit schedule.
+
+    ``decoder_type`` is either ``"relay"`` or ``"bp"``.
     """
 
     def __cinit__(
@@ -48,6 +55,7 @@ class AutBpDecoder:
         bint random_serial_schedule=False,
         object bp_input_type="auto",
         int memory_seed=-1,
+        serial_schedules=None,
     ): ...
 
     def decode(self, syndrome): ...
@@ -72,6 +80,18 @@ class AutBpDecoder:
 
         The entries follow the same order as :attr:`permutations`. A fresh
         immutable Python snapshot is produced on every access.
+        """
+
+    @property
+    def serial_schedules(self):
+        """Per-permutation serial-schedule overrides.
+
+        Each entry is either:
+
+        * ``None``, meaning use the factory-level ``serial_schedule``; or
+        * a tuple of bit indices passed specifically to that ensemble member.
+
+        An empty outer tuple means no per-member overrides were supplied.
         """
 
     @property

@@ -397,3 +397,274 @@ def test_repeated_construction_failure_does_not_crash():
         with pytest.raises(ValueError):
             make_decoder(priors=(0.1, 0.1))
     gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Per-permutation serial schedules
+# ---------------------------------------------------------------------------
+
+
+def test_serial_schedules_default_to_empty_tuple():
+    decoder = make_decoder()
+
+    assert decoder.serial_schedules == ()
+    assert isinstance(decoder.serial_schedules, tuple)
+
+
+def test_serial_schedules_roundtrip():
+    schedules = (
+        None,
+        (2, 0, 1),
+    )
+
+    decoder = make_decoder(
+        permutations=[IDENTITY, SWAP_01],
+        schedule="serial",
+        serial_schedule=(0, 1, 2),
+        serial_schedules=schedules,
+    )
+
+    assert decoder.serial_schedule == (0, 1, 2)
+    assert decoder.serial_schedules == schedules
+
+
+def test_serial_schedules_accept_lists_and_are_normalised_to_tuples():
+    decoder = make_decoder(
+        permutations=[IDENTITY, SWAP_01],
+        schedule="serial",
+        serial_schedules=[
+            None,
+            [2, 1, 0],
+        ],
+    )
+
+    assert decoder.serial_schedules == (
+        None,
+        (2, 1, 0),
+    )
+    assert isinstance(decoder.serial_schedules, tuple)
+    assert isinstance(decoder.serial_schedules[1], tuple)
+
+
+def test_serial_schedules_can_be_generators():
+    decoder = make_decoder(
+        permutations=[IDENTITY, SWAP_01],
+        schedule="serial",
+        serial_schedules=(
+            schedule
+            for schedule in (
+            None,
+            (bit for bit in (2, 0, 1)),
+        )
+        ),
+    )
+
+    assert decoder.serial_schedules == (
+        None,
+        (2, 0, 1),
+    )
+
+
+def test_serial_schedules_are_snapshotted():
+    member_schedule = [2, 0, 1]
+    schedules = [None, member_schedule]
+
+    decoder = make_decoder(
+        permutations=[IDENTITY, SWAP_01],
+        schedule="serial",
+        serial_schedules=schedules,
+    )
+
+    member_schedule[:] = [0, 1, 2]
+    schedules.clear()
+
+    assert decoder.serial_schedules == (
+        None,
+        (2, 0, 1),
+    )
+
+
+def test_serial_schedules_snapshot_is_immutable():
+    decoder = make_decoder(
+        permutations=[IDENTITY, SWAP_01],
+        schedule="serial",
+        serial_schedules=[
+            None,
+            (2, 0, 1),
+        ],
+    )
+
+    schedules = decoder.serial_schedules
+
+    with pytest.raises(TypeError):
+        schedules[0] = (0, 1, 2)
+
+    with pytest.raises(TypeError):
+        schedules[1][0] = 0
+
+
+def test_none_serial_schedule_uses_factory_level_fallback():
+    """None must be distinguishable from an explicitly present schedule."""
+    decoder = make_decoder(
+        permutations=[IDENTITY, SWAP_01],
+        schedule="serial",
+        serial_schedule=(2, 1, 0),
+        serial_schedules=(
+            None,
+            (0, 1, 2),
+        ),
+    )
+
+    assert decoder.serial_schedule == (2, 1, 0)
+    assert decoder.serial_schedules == (
+        None,
+        (0, 1, 2),
+    )
+
+    result = decoder.decode([0, 0])
+
+    assert len(result) == decoder.bit_count
+    assert len(decoder.last_member_stats) == 2
+
+
+def test_empty_member_serial_schedule_is_preserved_separately_from_none():
+    """An empty override is engaged optional<vector<int>>, unlike None."""
+    decoder = make_decoder(
+        permutations=[IDENTITY, SWAP_01],
+        schedule="serial",
+        serial_schedule=(2, 1, 0),
+        serial_schedules=(
+            None,
+            (),
+        ),
+    )
+
+    assert decoder.serial_schedules[0] is None
+    assert decoder.serial_schedules[1] == ()
+
+    result = decoder.decode([0, 0])
+
+    assert len(result) == decoder.bit_count
+    assert len(decoder.last_member_stats) == 2
+
+
+@pytest.mark.parametrize(
+    "serial_schedules",
+    [
+        [None],
+        [None, (0, 1, 2), (2, 1, 0)],
+    ],
+)
+def test_serial_schedules_count_must_match_permutation_count(
+        serial_schedules,
+):
+    with pytest.raises(
+            ValueError,
+            match="one entry per permutation",
+    ):
+        make_decoder(
+            permutations=[IDENTITY, SWAP_01],
+            schedule="serial",
+            serial_schedules=serial_schedules,
+        )
+
+
+@pytest.mark.parametrize(
+    "serial_schedules",
+    [
+        [()],  # Explicit empty member schedule is valid.
+        [],    # No per-member overrides is also valid.
+        None,  # Equivalent Python convenience spelling.
+    ],
+)
+def test_empty_serial_schedule_configurations_are_accepted(
+        serial_schedules,
+):
+    decoder = make_decoder(
+        schedule="serial",
+        serial_schedules=serial_schedules,
+    )
+
+    expected = () if serial_schedules is None else tuple(serial_schedules)
+    assert decoder.serial_schedules == expected
+
+
+@pytest.mark.parametrize(
+    "member_schedule",
+    [
+        (0, 1),        # Too short.
+        (0, 1, 2, 3),  # Too long.
+    ],
+)
+def test_member_serial_schedule_must_contain_one_entry_per_bit(
+        member_schedule,
+):
+    with pytest.raises(
+            ValueError,
+            match="one entry for each bit",
+    ):
+        make_decoder(
+            schedule="serial",
+            serial_schedules=[member_schedule],
+        )
+
+
+@pytest.mark.parametrize(
+    "member_schedule",
+    [
+        (-1, 0, 1),
+        (0, 1, 3),
+    ],
+)
+def test_member_serial_schedule_rejects_out_of_range_indices(
+        member_schedule,
+):
+    with pytest.raises(
+            ValueError,
+            match="out-of-range",
+    ):
+        make_decoder(
+            schedule="serial",
+            serial_schedules=[member_schedule],
+        )
+
+
+@pytest.mark.parametrize(
+    "member_schedule",
+    [
+        (0, 0, 1),
+        (2, 1, 2),
+    ],
+)
+def test_member_serial_schedule_rejects_duplicate_indices(
+        member_schedule,
+):
+    with pytest.raises(
+            ValueError,
+            match="duplicate",
+    ):
+        make_decoder(
+            schedule="serial",
+            serial_schedules=[member_schedule],
+        )
+
+
+def test_member_serial_schedules_work_with_relay_factory():
+    decoder = make_relay_decoder(
+        permutations=[IDENTITY, SWAP_01],
+        schedule="serial",
+        serial_schedule=(0, 1, 2),
+        serial_schedules=(
+            None,
+            (2, 1, 0),
+        ),
+    )
+
+    result = decoder.decode([1, 0])
+
+    assert len(result) == decoder.bit_count
+    assert decoder.serial_schedules == (
+        None,
+        (2, 1, 0),
+    )
+    assert len(decoder.last_member_stats) == 2

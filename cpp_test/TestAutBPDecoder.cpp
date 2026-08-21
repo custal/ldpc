@@ -23,6 +23,7 @@ using std::uint8_t;
 using std::vector;
 using ldpc::autbp::AutBpDecoder;
 using ldpc::autbp::DecoderFactory;
+using ldpc::autbp::OptionalSerialSchedule;
 using ldpc::autbp::Permutation;
 
 namespace {
@@ -239,12 +240,22 @@ TEST(AutBpDecoder, RejectsInvalidRowPermutation) {
 
 TEST(AutBpDecoder, RejectsNullDecoderFromFactory) {
     auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(3);
-    DecoderFactory null_factory =
-        [](ldpc::bp::BpSparse&, vector<double>)
-            -> std::unique_ptr<ldpc::bp::BpDecoder> { return nullptr; };
+
+    DecoderFactory null_factory = [](
+        ldpc::bp::BpSparse&,
+        vector<double>,
+        const OptionalSerialSchedule&)
+     -> std::unique_ptr<ldpc::bp::BpDecoder> {
+        return nullptr;
+    };
+
     EXPECT_THROW(
-        AutBpDecoder(pcm, vector<double>(3, 0.1),
-                     {identity_permutation(pcm.n, pcm.m)}, null_factory),
+        AutBpDecoder(
+            pcm,
+            vector<double>(3, 0.1),
+            {identity_permutation(pcm.n, pcm.m)},
+            std::move(null_factory)
+        ),
         std::runtime_error
     );
 }
@@ -393,7 +404,7 @@ TEST(AutBpDecoder, PublicDecodeAttributesMatchSingleMemberDecoder) {
 
     // Run the underlying decoder directly to obtain deterministic reference
     // values for every field copied or accumulated by AutBpDecoder.
-    auto reference = basic_bp_factory()(pcm, priors);
+    auto reference = basic_bp_factory()(pcm, priors, std::nullopt);
     ASSERT_NE(nullptr, reference);
     auto expected_decoding = reference->decode(syndrome);
     ASSERT_EQ(syndrome, pcm.mulvec(expected_decoding));
@@ -525,6 +536,213 @@ TEST(AutBpDecoder, PermutingPriorsBeforeDecodingIsCorrectOperation) {
     auto last_member_stats = decoder.last_member_stats();
     EXPECT_EQ(last_member_stats[0].converged, false);
     EXPECT_EQ(last_member_stats[1].converged, false);
+}
+
+TEST(AutBpDecoder, RejectsWrongNumberOfSerialSchedules) {
+    const int n = 5;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+
+    vector<Permutation> permutations{
+        identity_permutation(
+            static_cast<size_t>(pcm.n),
+            static_cast<size_t>(pcm.m)
+        ),
+        reversal_permutation(
+            static_cast<size_t>(pcm.n),
+            static_cast<size_t>(pcm.m)
+        )
+    };
+
+    // Two permutations, but only one serial-schedule entry.
+    vector<OptionalSerialSchedule> serial_schedules{
+        vector<int>{0, 1, 2, 3, 4}
+    };
+
+    EXPECT_THROW(
+        AutBpDecoder(
+            pcm,
+            vector<double>(n, 0.1),
+            std::move(permutations),
+            basic_bp_factory(),
+            std::nullopt,
+            std::move(serial_schedules)
+        ),
+        std::invalid_argument
+    );
+}
+
+TEST(AutBpDecoder, PassesSerialScheduleOverrideForEachPermutation) {
+    const int n = 5;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+
+    vector<Permutation> permutations{
+        identity_permutation(
+            static_cast<size_t>(pcm.n),
+            static_cast<size_t>(pcm.m)
+        ),
+        reversal_permutation(
+            static_cast<size_t>(pcm.n),
+            static_cast<size_t>(pcm.m)
+        )
+    };
+
+    vector<OptionalSerialSchedule> serial_schedules{
+        vector<int>{0, 1, 2, 3, 4},
+        vector<int>{4, 3, 2, 1, 0}
+    };
+
+    auto received_schedules =
+        std::make_shared<vector<OptionalSerialSchedule>>();
+
+    DecoderFactory underlying_factory = basic_bp_factory();
+
+    DecoderFactory recording_factory = [
+        received_schedules,
+        underlying_factory
+    ](
+        ldpc::bp::BpSparse& member_pcm,
+        vector<double> member_priors,
+        const OptionalSerialSchedule& member_serial_schedule
+    ) mutable -> std::unique_ptr<ldpc::bp::BpDecoder> {
+        received_schedules->push_back(member_serial_schedule);
+
+        return underlying_factory(
+            member_pcm,
+            std::move(member_priors),
+            member_serial_schedule
+        );
+    };
+
+    AutBpDecoder decoder(
+        pcm,
+        vector<double>(n, 0.1),
+        std::move(permutations),
+        std::move(recording_factory),
+        std::nullopt,
+        serial_schedules
+    );
+
+    ASSERT_EQ(2u, received_schedules->size());
+
+    ASSERT_TRUE((*received_schedules)[0].has_value());
+    ASSERT_TRUE((*received_schedules)[1].has_value());
+
+    EXPECT_EQ(
+        vector<int>({0, 1, 2, 3, 4}),
+        (*received_schedules)[0].value()
+    );
+
+    EXPECT_EQ(
+        vector<int>({4, 3, 2, 1, 0}),
+        (*received_schedules)[1].value()
+    );
+}
+
+TEST(AutBpDecoder, NullSerialScheduleIsPassedToFactory) {
+    const int n = 5;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+
+    auto received_schedules =
+        std::make_shared<vector<OptionalSerialSchedule>>();
+
+    DecoderFactory underlying_factory = basic_bp_factory();
+
+    DecoderFactory recording_factory = [
+        received_schedules,
+        underlying_factory
+    ](
+        ldpc::bp::BpSparse& member_pcm,
+        vector<double> member_priors,
+        const OptionalSerialSchedule& member_serial_schedule
+    ) mutable -> std::unique_ptr<ldpc::bp::BpDecoder> {
+        received_schedules->push_back(member_serial_schedule);
+
+        return underlying_factory(
+            member_pcm,
+            std::move(member_priors),
+            member_serial_schedule
+        );
+    };
+
+    vector<OptionalSerialSchedule> serial_schedules{
+        std::nullopt
+    };
+
+    AutBpDecoder decoder(
+        pcm,
+        vector<double>(n, 0.1),
+        {identity_permutation(pcm.n, pcm.m)},
+        std::move(recording_factory),
+        std::nullopt,
+        std::move(serial_schedules)
+    );
+
+    ASSERT_EQ(1u, received_schedules->size());
+    EXPECT_FALSE((*received_schedules)[0].has_value());
+
+    const vector<uint8_t> syndrome{0, 0, 0, 1};
+    auto result = decoder.decode(syndrome);
+
+    EXPECT_EQ(syndrome, pcm.mulvec(result));
+}
+
+TEST(AutBpDecoder, IdentityPermutationSerialScheduleEnsembleDecodesCorrectly) {
+    const int n = 5;
+    auto pcm = ldpc::gf2codes::rep_code<ldpc::bp::BpEntry>(n);
+
+    const Permutation identity = identity_permutation(
+        static_cast<size_t>(pcm.n),
+        static_cast<size_t>(pcm.m)
+    );
+
+    // Both members use the original PCM coordinates. Their only difference is
+    // the order in which variable nodes are processed.
+    vector<Permutation> permutations{
+        identity,
+        identity
+    };
+
+    vector<OptionalSerialSchedule> serial_schedules{
+        vector<int>{0, 1, 2, 3, 4},
+        vector<int>{4, 3, 2, 1, 0}
+    };
+
+    DecoderFactory factory = ldpc::autbp::make_bp_factory(
+        10,
+        ldpc::bp::MINIMUM_SUM,
+        ldpc::bp::SERIAL
+    );
+
+    AutBpDecoder decoder(
+        pcm,
+        vector<double>(n, 0.1),
+        std::move(permutations),
+        std::move(factory),
+        std::nullopt,
+        std::move(serial_schedules)
+    );
+
+    const vector<uint8_t> syndrome{0, 0, 0, 1};
+    const vector<uint8_t> expected{0, 0, 0, 0, 1};
+
+    vector<uint8_t> result = decoder.decode(syndrome);
+
+    EXPECT_EQ(expected, result);
+    EXPECT_EQ(syndrome, pcm.mulvec(result));
+
+    EXPECT_EQ(result, decoder.decoding);
+    EXPECT_TRUE(decoder.converge);
+    EXPECT_EQ(2u, decoder.solution_number);
+
+    const auto& stats = decoder.last_member_stats();
+
+    ASSERT_EQ(2u, stats.size());
+
+    EXPECT_TRUE(stats[0].converged);
+    EXPECT_TRUE(stats[1].converged);
+
+    EXPECT_GT(stats[0].iterations, 0);
+    EXPECT_GT(stats[1].iterations, 0);
 }
 
 int main(int argc, char** argv) {

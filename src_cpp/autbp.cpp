@@ -32,7 +32,14 @@ struct Permutation {
     std::vector<std::size_t> old_row_for_new;
 };
 struct MemberStats { int iterations = -1; bool converged = false; };
-using DecoderFactory = std::function<std::unique_ptr<BpDecoder>(BpSparse&, std::vector<double>)>;
+
+using OptionalSerialSchedule = std::optional<std::vector<int>>;
+
+using DecoderFactory = std::function<std::unique_ptr<BpDecoder>(
+    BpSparse&,
+    std::vector<double>,
+    const OptionalSerialSchedule&
+)>;
 
 namespace graph_automorphisms {
     using VertexPermutation = std::vector<std::size_t>; // image[old_vertex] = new_vertex
@@ -170,8 +177,14 @@ DecoderFactory make_bp_factory(
         bp_input_type
     ](
         ldpc::bp::BpSparse& pcm,
-        std::vector<double> channel_probabilities
+        std::vector<double> channel_probabilities,
+        const OptionalSerialSchedule& member_serial_schedule
     ) -> std::unique_ptr<ldpc::bp::BpDecoder> {
+        const std::vector<int>& effective_serial_schedule =
+            member_serial_schedule
+                ? *member_serial_schedule
+                : serial_schedule;
+
         return std::make_unique<ldpc::relay::RelayBpDecoder>(
             pcm,
             std::move(channel_probabilities),
@@ -186,7 +199,7 @@ DecoderFactory make_bp_factory(
             schedule,
             min_sum_scaling_factor,
             omp_threads,
-            serial_schedule,
+            effective_serial_schedule,
             random_schedule_seed,
             random_serial_schedule,
             bp_input_type,
@@ -232,8 +245,14 @@ DecoderFactory make_relay_bp_factory(
         memory_seed
     ](
         ldpc::bp::BpSparse& pcm,
-        std::vector<double> channel_probabilities
+        std::vector<double> channel_probabilities,
+        const OptionalSerialSchedule& member_serial_schedule
     ) -> std::unique_ptr<ldpc::bp::BpDecoder> {
+        const std::vector<int>& effective_serial_schedule =
+            member_serial_schedule
+                ? *member_serial_schedule
+                : serial_schedule;
+
         return std::make_unique<ldpc::relay::RelayBpDecoder>(
             pcm,
             std::move(channel_probabilities),
@@ -248,7 +267,7 @@ DecoderFactory make_relay_bp_factory(
             schedule,
             min_sum_scaling_factor,
             omp_threads,
-            serial_schedule,
+            effective_serial_schedule,
             random_schedule_seed,
             random_serial_schedule,
             bp_input_type,
@@ -268,9 +287,11 @@ public:
 
     AutBpDecoder(const BpSparse& base_pcm, std::vector<double> priors,
                  std::vector<Permutation> permutations, DecoderFactory factory,
-                 std::optional<std::size_t> maximum_solutions=std::nullopt)
+                 std::optional<std::size_t> maximum_solutions=std::nullopt,
+                 std::vector<OptionalSerialSchedule> serial_schedules={})
       : base_pcm_(clone_matrix(base_pcm)), priors_(std::move(priors)),
         permutations_(std::move(permutations)),
+        serial_schedules_(std::move(serial_schedules)),
         maximum_solutions_(maximum_solutions) {
         initialise(std::move(factory));
         this->solution_number = 0;
@@ -286,8 +307,10 @@ public:
     AutBpDecoder(const BpSparse& base_pcm, std::vector<double> priors,
                  DecoderFactory factory, std::size_t max_automorphisms,
                  std::optional<std::size_t> maximum_solutions=std::nullopt,
-                 bool include_identity=true)
+                 bool include_identity=true,
+                 std::vector<OptionalSerialSchedule> serial_schedules={})
       : base_pcm_(clone_matrix(base_pcm)), priors_(std::move(priors)),
+        serial_schedules_(std::move(serial_schedules)),
         maximum_solutions_(maximum_solutions) {
         permutations_=graph_automorphisms::find_from_pcm(
             *base_pcm_,max_automorphisms,include_identity);
@@ -345,6 +368,7 @@ private:
     std::unique_ptr<BpSparse> base_pcm_;
     std::vector<double> priors_;
     std::vector<Permutation> permutations_;
+    std::vector<OptionalSerialSchedule> serial_schedules_;
     std::optional<std::size_t> maximum_solutions_;
     std::vector<std::unique_ptr<BpSparse>> permuted_pcms_;
     std::vector<std::unique_ptr<BpDecoder>> decoders_;
@@ -356,10 +380,33 @@ private:
         if(priors_.size()!=static_cast<std::size_t>(base_pcm_->n)) throw std::invalid_argument("priors length must equal H.n");
         if(maximum_solutions_ && *maximum_solutions_==0) throw std::invalid_argument("maximum_solutions must be positive");
 
-        for(const auto& p:permutations_) {
-            validate_perm(p.old_col_for_new,base_pcm_->n);
-            validate_perm(p.old_row_for_new,base_pcm_->m);
+        if(serial_schedules_.empty()) {
+            serial_schedules_.resize(permutations_.size(),std::nullopt);
+        } else if(serial_schedules_.size()!=permutations_.size()) {
+            throw std::invalid_argument(
+                "serial_schedules must be empty or contain one entry per permutation"
+            );
         }
+
+        for (std::size_t k = 0; k < permutations_.size(); ++k) {
+            const auto& permutation = permutations_[k];
+            validate_perm(
+                permutation.old_col_for_new,
+                static_cast<std::size_t>(base_pcm_->n)
+            );
+            validate_perm(
+                permutation.old_row_for_new,
+                static_cast<std::size_t>(base_pcm_->m)
+            );
+
+            if (serial_schedules_[k].has_value()) {
+                validate_serial_schedule(
+                    serial_schedules_[k].value(),
+                    static_cast<std::size_t>(base_pcm_->n)
+                );
+            }
+        }
+
 
         // We create a new decoder instance for each permutation. An alternative approach is to have a single decoder
         // instance then unpermute the correction however this requires the row permutations have a corresponding column
@@ -367,9 +414,10 @@ private:
         // not necessarily code automorphisms
         permuted_pcms_.reserve(permutations_.size());
         decoders_.reserve(permutations_.size());
-        for(const auto& p:permutations_) {
+        for(std::size_t k=0;k<permutations_.size();++k) {
+            const auto& p=permutations_[k];
             auto permuted_pcm=permute_matrix_rows(*base_pcm_,p.old_row_for_new);
-            auto decoder=factory(*permuted_pcm,priors_);
+            auto decoder=factory(*permuted_pcm,priors_,serial_schedules_[k]);
             if(!decoder) throw std::runtime_error("decoder factory returned null");
             permuted_pcms_.push_back(std::move(permuted_pcm));
             decoders_.push_back(std::move(decoder));
@@ -379,6 +427,45 @@ private:
     static void validate_perm(const std::vector<std::size_t>& p,std::size_t n) {
         if(p.size()!=n) throw std::invalid_argument("permutation has wrong size");
         std::vector<bool> seen(n,false); for(auto x:p) { if(x>=n||seen[x]) throw std::invalid_argument("invalid permutation"); seen[x]=true; }
+    }
+
+    static void validate_serial_schedule(
+        const std::vector<int>& serial_schedule,
+        std::size_t bit_count
+        ) {
+        // An empty schedule is permitted and represents the decoder's default
+        // serial schedule.
+        if (serial_schedule.empty()) {
+            return;
+        }
+
+        if (serial_schedule.size() != bit_count) {
+            throw std::invalid_argument(
+                "serial schedule must contain one entry for each bit"
+            );
+        }
+
+        std::vector<bool> seen(bit_count, false);
+
+        for (const int bit : serial_schedule) {
+            if (bit < 0 ||
+                static_cast<std::size_t>(bit) >= bit_count) {
+                throw std::invalid_argument(
+                    "serial schedule contains an out-of-range bit index"
+                );
+                }
+
+            const std::size_t bit_index =
+                static_cast<std::size_t>(bit);
+
+            if (seen[bit_index]) {
+                throw std::invalid_argument(
+                    "serial schedule contains a duplicate bit index"
+                );
+            }
+
+            seen[bit_index] = true;
+        }
     }
 
     static std::unique_ptr<BpSparse> clone_matrix(const BpSparse& src) {

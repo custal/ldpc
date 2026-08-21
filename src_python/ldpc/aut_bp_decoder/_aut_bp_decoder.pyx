@@ -128,6 +128,44 @@ cdef vector[int] _int_vector(object values):
         out.push_back(int(value))
     return out
 
+cdef vector[OptionalSerialSchedule] _optional_serial_schedule_vector(
+    object schedules
+) except *:
+    """Convert [None | iterable[int], ...] to the corresponding C++ vector."""
+    cdef vector[OptionalSerialSchedule] out
+    cdef OptionalSerialSchedule member_schedule
+    cdef vector[int] converted_schedule
+    cdef object schedule
+
+    for schedule in schedules:
+        if schedule is None:
+            # A default-constructed std::optional is disengaged. The C++
+            # factory will therefore use its factory-level serial_schedule.
+            member_schedule = OptionalSerialSchedule()
+        else:
+            converted_schedule = _int_vector(schedule)
+            member_schedule = OptionalSerialSchedule(converted_schedule)
+
+        out.push_back(member_schedule)
+
+    return out
+
+
+def _normalise_serial_schedules(object schedules):
+    """Create an immutable Python snapshot of member schedule overrides."""
+    if schedules is None:
+        return ()
+
+    normalised = []
+
+    for schedule in schedules:
+        if schedule is None:
+            normalised.append(None)
+        else:
+            normalised.append(tuple(int(bit) for bit in schedule))
+
+    return tuple(normalised)
+
 
 cdef vector[vector[double]] _double_matrix(object rows):
     cdef vector[vector[double]] out
@@ -236,12 +274,15 @@ cdef unique_ptr[BpSparse] _copy_pcm(object pcm) except *:
 cdef class AutBpDecoder:
     """Python owner for ``ldpc::autbp::AutBpDecoder``.
 
-    Supply either ``max_automorphisms`` for BLISS discovery or ``permutations``
-    for a predefined sequence. Each predefined item is a dict with
-    ``old_col_for_new`` and ``old_row_for_new``, or a ``(cols, rows)``
-    pair. ``decoder_type`` is either ``"relay"`` (default) or ``"bp"``. Relay-only
-    arguments are retained as properties even when the plain BP factory is
-    selected, making the complete construction configuration inspectable.
+    Supply either ``max_automorphisms`` for BLISS discovery or
+    ``permutations`` for a predefined sequence.
+
+    ``serial_schedule`` is the factory-level fallback schedule.
+    ``serial_schedules`` optionally supplies one override per permutation.
+    Each override may be ``None`` to use ``serial_schedule``, or an iterable
+    containing that member's complete bit schedule.
+
+    ``decoder_type`` is either ``"relay"`` or ``"bp"``.
     """
 
     def __cinit__(
@@ -269,6 +310,7 @@ cdef class AutBpDecoder:
         bint random_serial_schedule=False,
         object bp_input_type="auto",
         int memory_seed=-1,
+        serial_schedules=None,
     ):
         cdef vector[double] c_priors
         cdef vector[int] c_serial_schedule
@@ -286,14 +328,32 @@ cdef class AutBpDecoder:
         c_schedule = _bp_schedule_from_python(schedule)
         c_bp_input_type = _bp_input_type_from_python(bp_input_type)
 
+        cdef vector[OptionalSerialSchedule] c_serial_schedules
+        cdef object serial_schedules_snapshot
+
         # Materialise iterable inputs once so generators are handled correctly.
         priors = tuple(priors)
         gamma_dist_interval = tuple(gamma_dist_interval)
         memory_strengths_per_leg = tuple([tuple(row) for row in memory_strengths_per_leg])
         serial_schedule = tuple(serial_schedule)
+
+        # Each item is materialised independently so member schedules may
+        # themselves be generators.
+        serial_schedules_snapshot = _normalise_serial_schedules(
+            serial_schedules
+        )
+        c_serial_schedules = _optional_serial_schedule_vector(
+            serial_schedules_snapshot
+        )
+
         if permutations is not None:
             permutation_snapshot = _normalise_permutations(permutations)
             permutations = permutation_snapshot
+            if (len(serial_schedules_snapshot) != 0 and len(serial_schedules_snapshot) != len(permutation_snapshot)):
+               raise ValueError(
+                   "serial_schedules must be empty or contain one entry "
+                   "per permutation"
+               )
 
         if decoder_type not in ("bp", "relay"):
             raise ValueError("decoder_type must be 'bp' or 'relay'")
@@ -356,14 +416,24 @@ cdef class AutBpDecoder:
 
         if permutations is None:
             self._decoder = unique_ptr[AutBpDecoderCpp](new AutBpDecoderCpp(
-                self._pcm.get()[0], c_priors, factory, c_max_automorphisms,
-                c_maximum_solutions, <cpp_bool>include_identity
-            ))
+                    self._pcm.get()[0],
+                    c_priors,
+                    factory,
+                    c_max_automorphisms,
+                    c_maximum_solutions,
+                    <cpp_bool>include_identity,
+                    c_serial_schedules,
+                ))
+
         else:
             self._decoder = unique_ptr[AutBpDecoderCpp](new AutBpDecoderCpp(
-                self._pcm.get()[0], c_priors, c_permutations, factory,
-                c_maximum_solutions
-            ))
+                    self._pcm.get()[0],
+                    c_priors,
+                    c_permutations,
+                    factory,
+                    c_maximum_solutions,
+                    c_serial_schedules,
+                ))
 
         # Preserve immutable Python snapshots of every input except pcm.
         self._priors = tuple([float(x) for x in priors])
@@ -387,6 +457,7 @@ cdef class AutBpDecoder:
         self._random_schedule_seed = random_schedule_seed
         self._random_serial_schedule = random_serial_schedule
         self._memory_seed = memory_seed
+        self._serial_schedules = serial_schedules_snapshot
 
         if c_bp_method == BpMethod.MINIMUM_SUM:
             self._bp_method = "minimum_sum"
@@ -477,6 +548,19 @@ cdef class AutBpDecoder:
             (int(values[0][i].iterations), bool(values[0][i].converged))
             for i in range(values[0].size())
         ])
+
+    @property
+    def serial_schedules(self):
+        """Per-permutation serial-schedule overrides.
+
+        Each entry is either:
+
+        * ``None``, meaning use the factory-level ``serial_schedule``; or
+        * a tuple of bit indices passed specifically to that ensemble member.
+
+        An empty outer tuple means no per-member overrides were supplied.
+        """
+        return self._serial_schedules
 
     @property
     def max_automorphisms(self): return self._max_automorphisms

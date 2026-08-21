@@ -2,7 +2,10 @@
 # cython: language_level=3
 
 from libc.stdint cimport uint8_t
+from libc.stddef cimport size_t
+
 from libcpp cimport bool as cpp_bool
+from libcpp.memory cimport unique_ptr
 from libcpp.optional cimport optional
 from libcpp.vector cimport vector
 from libcpp.memory cimport unique_ptr
@@ -32,6 +35,14 @@ cdef extern from "bp.hpp":
 
     cdef cppclass BpDecoder "ldpc::bp::BpDecoder":
         pass
+
+
+# Mirrors:
+#
+# using OptionalSerialSchedule =
+#     std::optional<std::vector<int>>;
+#
+ctypedef optional[vector[int]] OptionalSerialSchedule
 
 
 cdef extern from "autbp.cpp" namespace "ldpc::autbp":
@@ -85,21 +96,25 @@ cdef extern from "autbp.cpp" namespace "ldpc::autbp":
         cpp_bool converge
         vector[double] log_prob_ratios
 
+        # Explicit-permutation constructor.
         AutBpDecoderCpp(
             const BpSparse& base_pcm,
             vector[double] priors,
             vector[Permutation] permutations,
             DecoderFactory factory,
-            optional[size_t] maximum_solutions
+            optional[size_t] maximum_solutions,
+            vector[OptionalSerialSchedule] serial_schedules
         ) except +
 
+        # BLISS-discovery constructor.
         AutBpDecoderCpp(
             const BpSparse& base_pcm,
             vector[double] priors,
             DecoderFactory factory,
             size_t max_automorphisms,
             optional[size_t] maximum_solutions,
-            cpp_bool include_identity
+            cpp_bool include_identity,
+            vector[OptionalSerialSchedule] serial_schedules
         ) except +
 
         vector[uint8_t] decode(const vector[uint8_t]& syndrome) except +
@@ -111,25 +126,35 @@ cdef class AutBpDecoder:
     cdef unique_ptr[BpSparse] _pcm
     cdef unique_ptr[AutBpDecoderCpp] _decoder
 
-    # Stored constructor inputs, used by read-only Python properties.
+    # Stored constructor inputs used by read-only Python properties.
     cdef object _priors
     cdef object _permutations
     cdef object _max_automorphisms
     cdef object _maximum_solutions
     cdef bint _include_identity
+
     cdef str _decoder_type
     cdef int _maximum_legs
     cdef int _relay_maximum_solutions
     cdef int _iterations0
     cdef int _maximum_iterations
+
     cdef double _gamma0
     cdef object _gamma_dist_interval
     cdef object _memory_strengths_per_leg
+
     cdef object _bp_method
     cdef object _schedule
     cdef double _min_sum_scaling_factor
     cdef int _omp_threads
+
+    # Factory-level fallback schedule.
     cdef object _serial_schedule
+
+    # Per-permutation schedule overrides. Each item is either None or a tuple
+    # containing the member's serial schedule.
+    cdef object _serial_schedules
+
     cdef int _random_schedule_seed
     cdef bint _random_serial_schedule
     cdef object _bp_input_type
