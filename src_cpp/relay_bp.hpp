@@ -379,92 +379,144 @@ namespace ldpc::relay {
             throw std::logic_error("Not implemented");
         }
 
-        virtual std::vector<uint8_t> &bp_decode_serial(std::vector<uint8_t> &syndrome) {
+        std::vector<uint8_t> &bp_decode_serial(std::vector<uint8_t> &syndrome) override {
+                std::fill(this->decoding.begin(), this->decoding.end(), 0);
+                std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
+                this->solution_number = 0;
+                this->iterations = 0;
+
+                bool any_converged = false;
+                double best_weight = std::numeric_limits<double>::max();
+                std::vector<uint8_t> best_decoding(this->bit_count, 0);
+                std::vector<double> best_log_prob_ratios(this->bit_count, 0.0);
+
                 int check_index = 0;
-                this->converge = false;
-                // initialise BP
-                this->initialise_log_domain_bp();
 
-                for (int it = 1; it <= maximum_iterations; it++) {
+                for (int leg = 0; leg < this->maximum_legs; leg++) {
+                    int leg_iterations = 0;
+                    this->converge = false;
+                    this->initialise_log_domain_bp_relay(leg);
+                    int leg_max_iterations = (leg == 0) ? this->iterations0 : this->maximum_iterations;
+                    std::vector<double> memory_strengths = this->generate_memory_strengths_for_leg(leg);
 
-                    double alpha;
-                    if(this->ms_scaling_factor == 0.0) {
-                        alpha = 1.0 - std::pow(2.0, -1.0*it);
-                    }
-                    else {
-                        alpha = this->ms_scaling_factor;
-                    }
+                    for (int it = 1; it <= leg_max_iterations; it++) {
 
-                    if (this->random_serial_schedule) {
-                        this->rng_list_shuffle.shuffle(this->serial_schedule_order);
-                    } else if (this->schedule == BpSchedule::SERIAL_RELATIVE) {
-                        throw std::logic_error("Not implemented");
-                    }
+                        double alpha;
+                        if(this->ms_scaling_factor == 0.0) {
+                            alpha = 1.0 - std::pow(2.0, -1.0*it);
+                        }
+                        else {
+                            alpha = this->ms_scaling_factor;
+                        }
 
-                    for (int bit_index: this->serial_schedule_order) {
-                        double temp = NAN;
-                        this->log_prob_ratios[bit_index] = std::log(
-                                (1 - channel_probabilities[bit_index]) / channel_probabilities[bit_index]);
-                        if (this->bp_method == 0) {
-                            for (auto &e: this->pcm.iterate_column(bit_index)) {
-                                check_index = e.row_index;
-                                e.check_to_bit_msg = 1.0;
-                                for (auto &g: this->pcm.iterate_row(check_index)) {
-                                    if (&g != &e) {
-                                        e.check_to_bit_msg *= tanh(g.bit_to_check_msg / 2);
-                                    }
-                                }
-                                e.check_to_bit_msg = pow(-1, syndrome[check_index]) *
-                                                     std::log((1 + e.check_to_bit_msg) / (1 - e.check_to_bit_msg));
-                                e.bit_to_check_msg = log_prob_ratios[bit_index];
-                                this->log_prob_ratios[bit_index] += e.check_to_bit_msg;
-                            }
-                        } else if (this->bp_method == 1) {
-                            for (auto &e: pcm.iterate_column(bit_index)) {
-                                check_index = e.row_index;
-                                int sgn = syndrome[check_index];
-                                temp = std::numeric_limits<double>::max();
-                                for (auto &g: this->pcm.iterate_row(check_index)) {
-                                    // TODO: Can this be made more efficient by finding the min and second min value
-                                    // just the once for a given syndrome then recycling them for each check to bit,
-                                    // only using second min if the min is the edge to be passed to?
-                                    // Perhaps this only works for parallel schedule
-                                    if (&g != &e) {
-                                        double abs_bit_to_check_msg = std::abs(g.bit_to_check_msg);
-                                        if (abs_bit_to_check_msg < temp) {
-                                            temp = abs_bit_to_check_msg;
-                                        }
-                                        if (g.bit_to_check_msg <= 0) {
-                                            sgn += 1;
+                        if (this->random_serial_schedule) {
+                            this->rng_list_shuffle.shuffle(this->serial_schedule_order);
+                        } else if (this->schedule == BpSchedule::SERIAL_RELATIVE) {
+                            throw std::logic_error("Not implemented");
+                        }
+
+                        for (int bit_index: this->serial_schedule_order) {
+                            double temp = NAN;
+                            // Handle edge cases of 0 and 1 memory strengths to avoid infty * 0
+                            if (memory_strengths[bit_index] == 0.0)
+                                this->log_prob_ratios[bit_index] =
+                                        this->initial_log_prob_ratios[bit_index];
+                            else if (memory_strengths[bit_index] == 1.0)
+                                this->log_prob_ratios[bit_index] =
+                                        this->log_prob_ratios[bit_index];
+                            else
+                                this->log_prob_ratios[bit_index] =
+                                        (1 - memory_strengths[bit_index]) *
+                                        this->initial_log_prob_ratios[bit_index] +
+                                        memory_strengths[bit_index] *
+                                        this->log_prob_ratios[bit_index];
+                            if (this->bp_method == 0) {
+                                for (auto &e: this->pcm.iterate_column(bit_index)) {
+                                    check_index = e.row_index;
+                                    e.check_to_bit_msg = 1.0;
+                                    for (auto &g: this->pcm.iterate_row(check_index)) {
+                                        if (&g != &e) {
+                                            e.check_to_bit_msg *= tanh(g.bit_to_check_msg / 2);
                                         }
                                     }
+                                    e.check_to_bit_msg = pow(-1, syndrome[check_index]) *
+                                                         std::log((1 + e.check_to_bit_msg) / (1 - e.check_to_bit_msg));
+                                    e.bit_to_check_msg = log_prob_ratios[bit_index];
+                                    this->log_prob_ratios[bit_index] += e.check_to_bit_msg;
                                 }
-                                double message_sign = (sgn % 2 == 0) ? 1.0 : -1.0;
-                                e.check_to_bit_msg = alpha * message_sign * temp;
-                                e.bit_to_check_msg = log_prob_ratios[bit_index];
-                                this->log_prob_ratios[bit_index] += e.check_to_bit_msg;
+                            } else if (this->bp_method == 1) {
+                                for (auto &e: pcm.iterate_column(bit_index)) {
+                                    check_index = e.row_index;
+                                    int sgn = syndrome[check_index];
+                                    temp = std::numeric_limits<double>::max();
+                                    for (auto &g: this->pcm.iterate_row(check_index)) {
+                                        // TODO: Can this be made more efficient by finding the min and second min value
+                                        // just the once for a given syndrome then recycling them for each check to bit,
+                                        // only using second min if the min is the edge to be passed to?
+                                        // Perhaps this only works for parallel schedule
+                                        if (&g != &e) {
+                                            double abs_bit_to_check_msg = std::abs(g.bit_to_check_msg);
+                                            if (abs_bit_to_check_msg < temp) {
+                                                temp = abs_bit_to_check_msg;
+                                            }
+                                            if (g.bit_to_check_msg <= 0) {
+                                                sgn += 1;
+                                            }
+                                        }
+                                    }
+                                    double message_sign = (sgn % 2 == 0) ? 1.0 : -1.0;
+                                    e.check_to_bit_msg = alpha * message_sign * temp;
+                                    e.bit_to_check_msg = log_prob_ratios[bit_index];
+                                    this->log_prob_ratios[bit_index] += e.check_to_bit_msg;
+                                }
+                            }
+                            if (this->log_prob_ratios[bit_index] <= 0) {
+                                this->decoding[bit_index] = 1;
+                            } else {
+                                this->decoding[bit_index] = 0;
+                            }
+                            temp = 0;
+                            for (auto &e: this->pcm.reverse_iterate_column(bit_index)) {
+                                e.bit_to_check_msg += temp;
+                                temp += e.check_to_bit_msg;
                             }
                         }
-                        if (this->log_prob_ratios[bit_index] <= 0) {
-                            this->decoding[bit_index] = 1;
-                        } else {
-                            this->decoding[bit_index] = 0;
-                        }
-                        temp = 0;
-                        for (auto &e: this->pcm.reverse_iterate_column(bit_index)) {
-                            e.bit_to_check_msg += temp;
-                            temp += e.check_to_bit_msg;
+
+                        // compute the syndrome for the current candidate decoding solution
+                        this->candidate_syndrome = pcm.mulvec(decoding, candidate_syndrome);
+                        leg_iterations = it;
+                        if (std::equal(candidate_syndrome.begin(), candidate_syndrome.end(), syndrome.begin())) {
+                            this->converge = true;
+                            this->solution_number += 1;
+                            break;
                         }
                     }
 
-                    // compute the syndrome for the current candidate decoding solution
-                    this->candidate_syndrome = pcm.mulvec(decoding, candidate_syndrome);
-                    this->iterations = it;
-                    if (std::equal(candidate_syndrome.begin(), candidate_syndrome.end(), syndrome.begin())) {
-                        this->converge = true;
-                        return this->decoding;
+                    this->iterations += leg_iterations;
+
+                    if (this->converge) {
+                        double weight = this->decoding_weight(this->decoding);
+                        if (!any_converged || weight < best_weight) {
+                            best_weight = weight;
+                            best_decoding = this->decoding;
+                            best_log_prob_ratios = this->log_prob_ratios;
+                            any_converged = true;
+                        }
+                    }
+
+                    if (this->solution_number == this->maximum_solutions) {
+                        break;
                     }
                 }
+
+                if (any_converged) {
+                    this->decoding = best_decoding;
+                    this->log_prob_ratios = best_log_prob_ratios;
+                    this->converge = true;
+                } else {
+                    this->converge = false;
+                }
+
                 return this->decoding;
             }
 
