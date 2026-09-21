@@ -6,6 +6,39 @@ import ldpc.helpers.scipy_helpers
 from ldpc.bp_decoder._bp_decoder import (
 
 
+def available_precisions() -> List[int]:
+    """
+    The message-passing precisions, in mantissa bits, that the C++ extension was
+    compiled with, in ascending order.
+
+    Precision is a compile-time property of the C++ template, so the decoder offers
+    a menu of tiers rather than a continuum. A requested precision is rounded *up*
+    to the smallest tier that is at least as precise; 24 is IEEE single, 53 is IEEE
+    double, and everything above that is a Boost ``cpp_bin_float`` of the stated
+    mantissa width.
+
+    Returns:
+        List[int]: The available precisions in mantissa bits.
+    """
+
+
+def resolve_precision(requested) -> int:
+    """
+    Returns the precision tier a request of `requested` mantissa bits will actually
+    run at, without having to construct a decoder.
+
+    Args:
+        requested (int): The desired number of mantissa bits.
+
+    Returns:
+        int: The smallest available tier that is at least as precise.
+
+    Raises:
+        ValueError: If `requested` is not a positive integer or exceeds the largest
+            compiled-in tier.
+    """
+
+
 class RelayBpDecoderBase:
 
     """
@@ -333,6 +366,33 @@ class RelayBpDecoderBase:
     @memory_seed.setter
     def memory_seed(self, value: int) -> None: ...
 
+    @property
+    def precision(self) -> int:
+        """
+        The number of mantissa bits the message passing is actually carried out in.
+
+        This is `precision_request` rounded up to the nearest tier the extension
+        was compiled with; see `available_precisions()`. Assigning to it changes
+        the precision used from the next call to `decode` onwards.
+        """
+
+    @precision.setter
+    def precision(self, value) -> None: ...
+
+    @property
+    def precision_request(self) -> int:
+        """
+        The precision that was asked for, in mantissa bits, before it was rounded
+        up to an available tier. Equal to `precision` when the request landed
+        exactly on a tier.
+        """
+
+    @property
+    def available_precisions(self) -> List[int]:
+        """
+        The precisions this decoder can be switched between, in mantissa bits.
+        """
+
 
 class RelayBpDecoder(RelayBpDecoderBase):
     """
@@ -388,6 +448,29 @@ class RelayBpDecoder(RelayBpDecoderBase):
         parity matrix is non-square, the input vector type is inferred automatically from its length.
     memory_seed: int, optional
         seed for the per-leg memory strength RNG; -1 -> seed non-deterministically
+    precision : Optional[int], optional
+        The size, in mantissa bits, of the floating point numbers used to carry the
+        messages in the message passing algorithm. By default 53, which is IEEE
+        double precision and reproduces the decoder's previous behaviour exactly.
+        24 gives IEEE single precision, and anything above 53 is run in Boost
+        ``cpp_bin_float`` software floating point of the requested width, so the
+        precision can be pushed arbitrarily high at a cost in runtime.
+
+        Because the working type is a C++ template parameter, the extension is
+        compiled with a menu of tiers rather than a continuum: a request is rounded
+        *up* to the smallest available tier that is at least as precise, and the
+        value actually in use is reported by the `precision` attribute.
+        `available_precisions()` lists the tiers, and tiers can be added or removed
+        by defining ``RELAY_BP_PRECISION_TIERS`` before ``relay_bp.hpp`` is included.
+
+        Only the message passing is affected. The error channel, the memory
+        strengths and the reported `log_prob_ratios` remain float64, so every
+        existing attribute keeps the type and meaning it always had.
+
+        Note that the emulated types above 53 bits widen the mantissa but not the
+        exponent range, so the 11 bit tier is not a faithful model of IEEE half
+        precision (and, being software floating point, it is slower than 24 or 53,
+        not faster).
     """
 
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
@@ -397,7 +480,7 @@ class RelayBpDecoder(RelayBpDecoderBase):
                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
-                 memory_seed: Optional[int] = -1, **kwargs): ...
+                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, **kwargs): ...
 
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
@@ -406,7 +489,7 @@ class RelayBpDecoder(RelayBpDecoderBase):
                                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
-                                 memory_seed: Optional[int] = -1, **kwargs): ...
+                                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, **kwargs): ...
 
     def decode(self, input_vector: np.ndarray) -> np.ndarray:
         """

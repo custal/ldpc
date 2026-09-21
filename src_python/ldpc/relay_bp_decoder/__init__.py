@@ -1,4 +1,7 @@
 from ldpc.relay_bp_decoder._relay_bp_decoder import (
+    RelayBpDecoder,
     RelayBpDecoderBase,
-    RelayBpDecoder
+    available_precisions,
+    resolve_precision,
+    DEFAULT_PRECISION,
 )

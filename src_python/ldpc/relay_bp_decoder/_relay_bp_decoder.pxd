@@ -8,6 +8,14 @@ from ldpc.bp_decoder._bp_decoder cimport BpSparse, NULL_INT_VECTOR, BpMethod, Bp
 ctypedef np.uint8_t uint8_t
 
 
+# Free functions / constants describing the precision tiers that relay_bp.hpp was
+# compiled with. Declared with explicit C names so they are unambiguous.
+cdef extern from "relay_bp.hpp":
+    vector[int] cpp_available_precisions "ldpc::relay::available_precisions" ()
+    int cpp_resolve_precision "ldpc::relay::resolve_precision" (int requested) except +
+    int CPP_DEFAULT_PRECISION "ldpc::relay::DEFAULT_PRECISION"
+
+
 cdef extern from "relay_bp.hpp" namespace "ldpc::relay":
     cdef cppclass RelayBpDecoderCpp "ldpc::relay::RelayBpDecoder" (BpDecoderCpp):
             RelayBpDecoderCpp(
@@ -28,7 +36,8 @@ cdef extern from "relay_bp.hpp" namespace "ldpc::relay":
                 int random_schedule_seed,
                 bool random_serial_schedule,
                 BpInputType bp_input_type,
-                int memory_seed) except +
+                int memory_seed,
+                int precision) except +
             int maximum_legs
             int maximum_solutions
             vector[vector[double]] memory_strengths_per_leg
@@ -37,6 +46,12 @@ cdef extern from "relay_bp.hpp" namespace "ldpc::relay":
             vector[double] gamma_dist_interval
             int memory_seed
             void set_memory_seed(int seed)
+
+            # Mantissa bits used to carry the messages. `precision` is the tier
+            # actually in use, `precision_request` is what the caller asked for.
+            int precision
+            int precision_request
+            void set_precision(int requested_precision) except +
 
             int solution_number
             int iterations

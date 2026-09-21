@@ -67,7 +67,8 @@ cdef extern from "autbp.cpp" namespace "ldpc::autbp":
         const vector[int]& serial_schedule,
         int random_schedule_seed,
         cpp_bool random_serial_schedule,
-        BpInputType bp_input_type
+        BpInputType bp_input_type,
+        int precision
     ) except +
 
     DecoderFactory make_relay_bp_factory(
@@ -86,7 +87,8 @@ cdef extern from "autbp.cpp" namespace "ldpc::autbp":
         int random_schedule_seed,
         cpp_bool random_serial_schedule,
         BpInputType bp_input_type,
-        int memory_seed
+        int memory_seed,
+        int precision
     ) except +
 
     cdef cppclass AutBpDecoderCpp "ldpc::autbp::AutBpDecoder":
@@ -159,3 +161,6 @@ cdef class AutBpDecoder:
     cdef bint _random_serial_schedule
     cdef object _bp_input_type
     cdef int _memory_seed
+
+    # Mantissa bits used for the message passing, as requested.
+    cdef int _precision

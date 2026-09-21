@@ -55,6 +55,7 @@ class AutBpDecoder:
         bint random_serial_schedule=False,
         object bp_input_type="auto",
         int memory_seed=-1,
+        int precision=53,  # mantissa bits for the message passing; 53 == double
         serial_schedules=None,
     ): ...
 
@@ -134,6 +135,14 @@ class AutBpDecoder:
     def bp_input_type(self): return self._bp_input_type
     @property
     def memory_seed(self): return self._memory_seed
+    @property
+    def precision(self):
+        """Mantissa bits requested for the message passing, as passed in.
+
+        Every ensemble member decodes at this precision. It is rounded up to the
+        nearest tier the extension was compiled with, so the width actually used
+        is ``ldpc.relay_bp_decoder.resolve_precision(precision)``.
+        """
     @property
     def solution_number(self): return self._decoder.get().solution_number
     @property

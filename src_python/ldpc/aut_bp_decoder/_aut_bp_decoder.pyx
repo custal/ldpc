@@ -310,6 +310,7 @@ cdef class AutBpDecoder:
         bint random_serial_schedule=False,
         object bp_input_type="auto",
         int memory_seed=-1,
+        int precision=53,  # mantissa bits for the message passing; 53 == double
         serial_schedules=None,
     ):
         cdef vector[double] c_priors
@@ -393,6 +394,7 @@ cdef class AutBpDecoder:
                 random_schedule_seed,
                 <cpp_bool>random_serial_schedule,
                 <BpInputType>c_bp_input_type,
+                precision,
             )
         else:
             factory = make_relay_bp_factory(
@@ -412,6 +414,7 @@ cdef class AutBpDecoder:
                 <cpp_bool>random_serial_schedule,
                 <BpInputType>c_bp_input_type,
                 memory_seed,
+                precision,
             )
 
         if permutations is None:
@@ -457,6 +460,7 @@ cdef class AutBpDecoder:
         self._random_schedule_seed = random_schedule_seed
         self._random_serial_schedule = random_serial_schedule
         self._memory_seed = memory_seed
+        self._precision = precision
         self._serial_schedules = serial_schedules_snapshot
 
         if c_bp_method == BpMethod.MINIMUM_SUM:
@@ -602,6 +606,15 @@ cdef class AutBpDecoder:
     def bp_input_type(self): return self._bp_input_type
     @property
     def memory_seed(self): return self._memory_seed
+    @property
+    def precision(self):
+        """Mantissa bits requested for the message passing, as passed in.
+
+        Every ensemble member decodes at this precision. It is rounded up to the
+        nearest tier the extension was compiled with, so the width actually used
+        is ``ldpc.relay_bp_decoder.resolve_precision(precision)``.
+        """
+        return self._precision
 
 
     # Last-decode result getters.

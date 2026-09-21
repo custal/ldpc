@@ -71,6 +71,11 @@ else:
 
 this_directory = Path(__file__).parent
 
+boost_include_dirs = [
+    str(path)
+    for path in (this_directory / "external" / "boost" / "libs").glob("*/include")
+]
+
 cpp_modules = [
     "bp_decoder",
     "bposd_decoder",
@@ -112,12 +117,12 @@ for module in cpp_modules:
             libraries=[],
             library_dirs=[],
             include_dirs=[
-                np.get_include(),
-                "src_cpp",
-                "include/robin_map",
-                "include/ldpc/src_cpp",
-                "external/bliss/include"
-            ],
+                             np.get_include(),
+                             "src_cpp",
+                             "include/robin_map",
+                             "include/ldpc/src_cpp",
+                             "external/bliss/include",
+                         ] + boost_include_dirs,
             extra_compile_args=compile_flags,
             extra_link_args=extra_link_args,
             language="c++",

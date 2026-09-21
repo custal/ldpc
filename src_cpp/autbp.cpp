@@ -163,7 +163,8 @@ DecoderFactory make_bp_factory(
         const std::vector<int> &serial_schedule = ldpc::bp::NULL_INT_VECTOR,
         int random_schedule_seed = 0,
         bool random_serial_schedule = false,
-        ldpc::bp::BpInputType bp_input_type = ldpc::bp::AUTO
+        ldpc::bp::BpInputType bp_input_type = ldpc::bp::AUTO,
+        int precision = ldpc::relay::DEFAULT_PRECISION // mantissa bits used for the messages
     ) {
     return [
         maximum_iterations,
@@ -174,7 +175,8 @@ DecoderFactory make_bp_factory(
         serial_schedule,
         random_schedule_seed,
         random_serial_schedule,
-        bp_input_type
+        bp_input_type,
+        precision
     ](
         ldpc::bp::BpSparse& pcm,
         std::vector<double> channel_probabilities,
@@ -203,7 +205,8 @@ DecoderFactory make_bp_factory(
             random_schedule_seed,
             random_serial_schedule,
             bp_input_type,
-            -1
+            -1,
+            precision
         );
     };
 }
@@ -224,7 +227,8 @@ DecoderFactory make_relay_bp_factory(
             int random_schedule_seed = 0,
             bool random_serial_schedule = false,
             ldpc::bp::BpInputType bp_input_type = ldpc::bp::AUTO,
-            int memory_seed = -1 // seed for the per-leg memory strength RNG; -1 -> seed non-deterministically
+            int memory_seed = -1, // seed for the per-leg memory strength RNG; -1 -> seed non-deterministically
+            int precision = ldpc::relay::DEFAULT_PRECISION // mantissa bits used for the messages
     ) {
     return [
         maximum_legs,
@@ -242,7 +246,8 @@ DecoderFactory make_relay_bp_factory(
         random_schedule_seed,
         random_serial_schedule,
         bp_input_type,
-        memory_seed
+        memory_seed,
+        precision
     ](
         ldpc::bp::BpSparse& pcm,
         std::vector<double> channel_probabilities,
@@ -271,7 +276,8 @@ DecoderFactory make_relay_bp_factory(
             random_schedule_seed,
             random_serial_schedule,
             bp_input_type,
-            memory_seed
+            memory_seed,
+            precision
         );
     };
 }

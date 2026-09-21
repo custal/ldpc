@@ -1,4 +1,5 @@
 import gc
+import math
 
 import numpy as np
 import pytest
@@ -6,7 +7,12 @@ import scipy.sparse
 
 from ldpc.bp_decoder import BpDecoder
 from ldpc.codes import rep_code
-from ldpc.relay_bp_decoder import RelayBpDecoder
+from ldpc.relay_bp_decoder import (
+    DEFAULT_PRECISION,
+    RelayBpDecoder,
+    available_precisions,
+    resolve_precision,
+)
 
 
 # ============================================================================
@@ -89,6 +95,56 @@ def binary_syndrome(pcm, decoding):
         result = np.asarray(pcm) @ decoding
 
     return np.asarray(result, dtype=np.uint8).reshape(-1) % 2
+
+
+# Precision is a compile-time menu in the C++ template, so the tiers that exist
+# depend on how the extension was built rather than being fixed here.
+PRECISION_TIERS = available_precisions()
+
+# A subset for the heavier sweeps, so that parametrised tests do not spend
+# seconds in software floating point.
+FAST_PRECISION_TIERS = [
+    bits for bits in PRECISION_TIERS if bits <= 512
+]
+
+
+def non_default_precision():
+    """A tier that is not the default, so switching precision is observable."""
+
+    for bits in reversed(FAST_PRECISION_TIERS):
+        if bits != DEFAULT_PRECISION:
+            return bits
+
+    return DEFAULT_PRECISION
+
+
+def is_representable_in(value, mantissa_bits):
+    """Whether value fits exactly in a float of the given mantissa width."""
+
+    if not math.isfinite(value) or value == 0.0:
+        return True
+
+    mantissa, _ = math.frexp(value)
+
+    return float(
+        math.ldexp(mantissa, mantissa_bits)
+    ).is_integer()
+
+
+def assert_llrs_identical(first, second):
+    """Compare log probability ratios bitwise, treating two NaNs as equal.
+
+    The product-sum update can legitimately saturate to infinities and NaNs.
+    """
+
+    assert first.shape == second.shape
+
+    both_nan = np.isnan(first) & np.isnan(second)
+
+    assert np.array_equal(
+        first[~both_nan],
+        second[~both_nan],
+    )
 
 
 # ============================================================================
@@ -881,6 +937,438 @@ def test_repeated_decodes_reset_iterations():
 
     assert first_total > 0
     assert second_total == first_total
+
+
+# ============================================================================
+# Message-passing precision
+# ============================================================================
+
+def test_default_precision_is_double():
+    decoder = make_decoder()
+
+    assert DEFAULT_PRECISION == 53
+    assert decoder.precision == DEFAULT_PRECISION
+    assert decoder.precision_request == DEFAULT_PRECISION
+
+
+def test_available_precisions_sorted_and_contains_default():
+    tiers = available_precisions()
+
+    assert tiers
+    assert tiers == sorted(set(tiers))
+    assert DEFAULT_PRECISION in tiers
+
+    # 24 mantissa bits is IEEE single and is always compiled in.
+    assert 24 in tiers
+
+
+def test_decoder_exposes_available_precisions():
+    decoder = make_decoder()
+
+    assert decoder.available_precisions == available_precisions()
+
+
+@pytest.mark.parametrize("bits", PRECISION_TIERS)
+def test_resolve_precision_is_identity_on_a_tier(bits):
+    assert resolve_precision(bits) == bits
+
+
+def test_resolve_precision_rounds_up():
+    tiers = available_precisions()
+
+    # Below the smallest tier, promoted to it.
+    assert resolve_precision(1) == tiers[0]
+
+    # One bit past a tier moves up to the next one.
+    for lower, upper in zip(tiers, tiers[1:]):
+        assert resolve_precision(lower + 1) == upper
+
+
+@pytest.mark.parametrize(
+    "value",
+    [0, -1, -64],
+)
+def test_resolve_precision_rejects_non_positive(value):
+    with pytest.raises(ValueError):
+        resolve_precision(value)
+
+
+def test_resolve_precision_rejects_above_largest_tier():
+    with pytest.raises(ValueError):
+        resolve_precision(available_precisions()[-1] + 1)
+
+
+def test_precision_request_is_rounded_up_to_a_tier():
+    requested = PRECISION_TIERS[0] + 1
+
+    decoder = make_decoder(precision=requested)
+
+    assert decoder.precision_request == requested
+    assert decoder.precision == resolve_precision(requested)
+    assert decoder.precision >= requested
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        0,
+        -4,
+        10 ** 9,
+        53.0,
+        "53",
+        True,
+    ],
+)
+def test_init_rejects_invalid_precision(value):
+    with pytest.raises(ValueError):
+        make_decoder(precision=value)
+
+
+def test_precision_none_means_the_default():
+    """None is 'unspecified', matching the other optional parameters."""
+
+    decoder = make_decoder(precision=None)
+
+    assert decoder.precision == DEFAULT_PRECISION
+    assert decoder.precision_request == DEFAULT_PRECISION
+
+
+def test_precision_roundtrip():
+    decoder = make_decoder()
+
+    assert decoder.precision == DEFAULT_PRECISION
+
+    target = non_default_precision()
+    decoder.precision = target
+
+    assert decoder.precision == target
+    assert decoder.precision_request == target
+
+    decoder.precision = DEFAULT_PRECISION
+
+    assert decoder.precision == DEFAULT_PRECISION
+
+
+@pytest.mark.parametrize(
+    "value",
+    [0, -1, 10 ** 9, 1.5, "53"],
+)
+def test_invalid_precision_assignment_leaves_decoder_usable(value):
+    decoder = make_decoder()
+
+    with pytest.raises(ValueError):
+        decoder.precision = value
+
+    assert decoder.precision == DEFAULT_PRECISION
+    assert decoder.precision_request == DEFAULT_PRECISION
+
+    result = decoder.decode(
+        np.array([1, 0], dtype=np.uint8)
+    )
+
+    assert result.shape == (decoder.bit_count,)
+
+
+@pytest.mark.parametrize(
+    "syndrome",
+    [
+        np.array([0, 0, 0, 0], dtype=np.uint8),
+        np.array([0, 0, 0, 1], dtype=np.uint8),
+        np.array([1, 0, 1, 0], dtype=np.uint8),
+        np.array([1, 1, 1, 1], dtype=np.uint8),
+    ],
+)
+def test_explicit_double_matches_the_default_exactly(syndrome):
+    """The 53 bit tier must be the arithmetic the decoder always used."""
+
+    parity_check = rep_code(5)
+    n = parity_check.shape[1]
+
+    common = dict(
+        error_rate=0.1,
+        maximum_legs=3,
+        maximum_solutions=3,
+        iterations0=10,
+        max_iter=10,
+        gamma0=0.0,
+        memory_strengths_per_leg=np.array(
+            [
+                np.zeros(n),
+                np.full(n, 0.5),
+                np.full(n, 0.9),
+            ],
+            dtype=np.float64,
+        ),
+        bp_method="product_sum",
+        memory_seed=123,
+    )
+
+    implicit = RelayBpDecoder(parity_check, **common)
+    explicit = RelayBpDecoder(
+        parity_check, precision=53, **common
+    )
+
+    implicit_result = implicit.decode(syndrome)
+    explicit_result = explicit.decode(syndrome)
+
+    assert np.array_equal(
+        implicit_result,
+        explicit_result,
+    )
+    assert implicit.converge == explicit.converge
+    assert implicit.iterations == explicit.iterations
+    assert (
+        implicit.solution_number
+        == explicit.solution_number
+    )
+
+    assert_llrs_identical(
+        implicit.log_prob_ratios,
+        explicit.log_prob_ratios,
+    )
+
+
+@pytest.mark.parametrize("bits", PRECISION_TIERS)
+@pytest.mark.parametrize(
+    "schedule",
+    ["parallel", "serial"],
+)
+def test_every_precision_tier_decodes(bits, schedule):
+    """Every advertised tier must be reachable through the dispatch.
+
+    Correctness is only required of double and above: worse answers at low
+    precision are the point of the parameter, not a defect.
+    """
+
+    parity_check = rep_code(3)
+    n = parity_check.shape[1]
+
+    decoder = RelayBpDecoder(
+        parity_check,
+        error_rate=0.1,
+        maximum_legs=1,
+        maximum_solutions=1,
+        iterations0=30,
+        max_iter=30,
+        gamma0=0.0,
+        memory_strengths_per_leg=np.zeros(
+            (1, n),
+            dtype=np.float64,
+        ),
+        bp_method="minimum_sum",
+        schedule=schedule,
+        precision=bits,
+    )
+
+    assert decoder.precision == bits
+
+    syndrome = np.array([1, 0], dtype=np.uint8)
+    result = decoder.decode(syndrome)
+
+    assert result.shape == (n,)
+
+    if bits >= DEFAULT_PRECISION:
+        assert decoder.converge
+        assert np.array_equal(
+            binary_syndrome(parity_check, result),
+            syndrome,
+        )
+    elif decoder.converge:
+        assert np.array_equal(
+            binary_syndrome(parity_check, result),
+            syndrome,
+        )
+
+
+@pytest.mark.parametrize(
+    "bits",
+    [bits for bits in PRECISION_TIERS if bits < DEFAULT_PRECISION],
+)
+@pytest.mark.parametrize(
+    "schedule",
+    ["parallel", "serial"],
+)
+def test_low_precision_tiers_really_narrow_the_arithmetic(
+        bits,
+        schedule,
+):
+    """Guards against the dispatch quietly running everything in double."""
+
+    parity_check = rep_code(5)
+    n = parity_check.shape[1]
+
+    decoder = RelayBpDecoder(
+        parity_check,
+        error_rate=0.1,
+        maximum_legs=1,
+        maximum_solutions=1,
+        iterations0=10,
+        max_iter=10,
+        gamma0=0.0,
+        memory_strengths_per_leg=np.zeros(
+            (1, n),
+            dtype=np.float64,
+        ),
+        bp_method="minimum_sum",
+        schedule=schedule,
+        precision=bits,
+    )
+
+    decoder.decode(
+        np.array([0, 0, 0, 1], dtype=np.uint8)
+    )
+
+    llrs = decoder.log_prob_ratios
+
+    assert all(
+        is_representable_in(value, bits)
+        for value in llrs
+    )
+
+    # And genuinely coarser than the double result.
+    double_decoder = RelayBpDecoder(
+        parity_check,
+        error_rate=0.1,
+        maximum_legs=1,
+        maximum_solutions=1,
+        iterations0=10,
+        max_iter=10,
+        gamma0=0.0,
+        memory_strengths_per_leg=np.zeros(
+            (1, n),
+            dtype=np.float64,
+        ),
+        bp_method="minimum_sum",
+        schedule=schedule,
+    )
+
+    double_decoder.decode(
+        np.array([0, 0, 0, 1], dtype=np.uint8)
+    )
+
+    assert not np.array_equal(
+        llrs,
+        double_decoder.log_prob_ratios,
+    )
+
+
+@pytest.mark.parametrize("bits", FAST_PRECISION_TIERS)
+def test_outputs_stay_float64_at_every_precision(bits):
+    """Whatever the working precision, the exposed arrays are unchanged."""
+
+    decoder = make_decoder(precision=bits)
+
+    syndrome = np.array([1, 0], dtype=np.uint8)
+    result = decoder.decode(syndrome)
+
+    assert result.dtype == syndrome.dtype
+    assert decoder.log_prob_ratios.dtype == np.float64
+    assert decoder.error_channel.dtype == np.float64
+    assert np.all(np.isfinite(decoder.log_prob_ratios))
+
+    expected_llr = math.log((1.0 - 0.1) / 0.1)
+
+    # Narrowed from the working precision, so correct to that precision
+    # rather than bit for bit. Allow a few ulps of the tier in use, never
+    # finer than a few ulps of double.
+    tolerance = abs(expected_llr) * 2.0 ** -(
+        min(bits, DEFAULT_PRECISION) - 3
+    )
+
+    assert np.allclose(
+        decoder.error_channel,
+        0.1,
+        atol=tolerance,
+    )
+
+
+def test_switching_precision_matches_a_fresh_decoder():
+    """Precision is read per decode call, so switching must be equivalent."""
+
+    target = non_default_precision()
+
+    syndrome = np.array([1, 0], dtype=np.uint8)
+    warm_up = np.array([0, 1], dtype=np.uint8)
+
+    reused = make_decoder()
+    reused.decode(warm_up)
+    reused.precision = target
+    reused_result = reused.decode(syndrome)
+
+    fresh = make_decoder(precision=target)
+    fresh_result = fresh.decode(syndrome)
+
+    assert np.array_equal(reused_result, fresh_result)
+    assert reused.converge == fresh.converge
+    assert reused.iterations == fresh.iterations
+    assert (
+        reused.solution_number == fresh.solution_number
+    )
+
+    assert_llrs_identical(
+        reused.log_prob_ratios,
+        fresh.log_prob_ratios,
+    )
+
+
+@pytest.mark.parametrize("bits", FAST_PRECISION_TIERS)
+def test_precision_works_with_generated_memory_strengths(
+        bits,
+):
+    """Precision is orthogonal to how the memory strengths are produced."""
+
+    decoder = make_generated_memory_decoder(
+        precision=bits
+    )
+
+    assert decoder.precision == bits
+    assert decoder.memory_strengths_per_leg is None
+
+    result = decoder.decode(
+        np.array([1, 0], dtype=np.uint8)
+    )
+
+    assert result.shape == (decoder.bit_count,)
+
+
+def test_precision_does_not_disturb_other_properties():
+    decoder = make_decoder(
+        precision=non_default_precision(),
+        maximum_legs=2,
+        maximum_solutions=1,
+        iterations0=7,
+        max_iter=9,
+        bp_method="minimum_sum",
+        memory_seed=42,
+    )
+
+    assert decoder.maximum_legs == 2
+    assert decoder.maximum_solutions == 1
+    assert decoder.iterations0 == 7
+    assert decoder.max_iter == 9
+    assert decoder.bp_method == "minimum_sum"
+    assert decoder.memory_seed == 42
+    assert np.allclose(
+        decoder.memory_strengths_per_leg,
+        DEFAULT_STRENGTHS_PER_LEG,
+    )
+
+
+@pytest.mark.parametrize("bits", FAST_PRECISION_TIERS)
+def test_repeated_construction_and_decode_at_each_precision(
+        bits,
+):
+    syndrome = np.array([1, 0], dtype=np.uint8)
+
+    for _ in range(10):
+        decoder = make_decoder(precision=bits)
+        result = decoder.decode(syndrome)
+
+        assert result.shape == (decoder.bit_count,)
+
+        del decoder
+
+    gc.collect()
 
 
 # ============================================================================

@@ -35,15 +35,25 @@ if (LDPC_MASTER_PROJECT)
 	add_subdirectory(cpp_example)
 endif()
 
+add_subdirectory(external/bliss)
+add_subdirectory(external/boost)
+
+add_library(relay_bp INTERFACE)
+
+target_link_libraries(
+		relay_bp
+		INTERFACE
+		Boost::multiprecision)
+
 add_library(
 		autbp
 		src_cpp/autbp.cpp)
 
-add_subdirectory(external/bliss)
 target_link_libraries(
 		autbp
 		PRIVATE
-			Bliss::libbliss)
+		Bliss::libbliss
+		relay_bp)
 
 if(BUILD_LDPC_TESTS)
 	# Add test code

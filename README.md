@@ -28,13 +28,18 @@ cd ldpc
 pip install -Ue .
 ```
 
-## BLISS Installation
+## BLISS and BOOST Installation
 
 BLISS is third part software required for finding graph automorphisms for use in autbp. 
 
 To install BLISS run (from the ldpc project directory):
     mkdir external
     git clone https://github.com/scipopt/bliss.git external/bliss
+
+BOOST is third party software used here to allow for arbitrary precision floating point numbers.
+
+To install BOOST run (once external has been made as above and from the ldpc project directory):
+git clone --branch boost-1.92.0 --depth 1 --recurse-submodules --shallow-submodules https://github.com/boostorg/boost.git external/boost
 
 ## LDPCv1
 If your package requires LDPCv1, this can be installed from PyPi as follows:

@@ -48,4 +48,6 @@ foreach(TEST ${TEST_EXECUTABLES})
 endforeach()
 
 # TestAutBPDecoder additionally needs the bliss library
-target_link_libraries(TestAutBPDecoder PRIVATE Bliss::libbliss)
+target_link_libraries(TestAutBPDecoder PRIVATE Bliss::libbliss relay_bp)
+
+target_link_libraries(TestRelayBPDecoder PRIVATE relay_bp)
