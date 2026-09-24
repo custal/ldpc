@@ -86,6 +86,16 @@ cdef int _validate_precision(value) except? -1:
     return requested
 
 
+cdef bint _validate_debug(value) except? -1:
+    """
+    Shared validation for the `debug` flag. As in _validate_precision, `bool` is the
+    C++ bool in this module, so Python booleans are matched by identity.
+    """
+    if value is True or value is False or isinstance(value, np.bool_):
+        return True if value else False
+    raise ValueError(f"'debug' must be a boolean, not {type(value)}.")
+
+
 cdef BpSparse* Py2BpSparse(pcm):
     """
     Copied from _bp_decoder.pyx as it is not declared in the .pxd file so isn't importable and I don't want to touch
@@ -195,16 +205,19 @@ cdef class RelayBpDecoderBase:
         precision=kwargs.get("precision", None)
         if precision is None:
             precision = CPP_DEFAULT_PRECISION
+        debug=kwargs.get("debug", False)
 
 
         cdef int i, j, nonzero_count
         cdef int _precision
+        cdef bint _debug
         self.MEMORY_ALLOCATED=False
 
         # Validated up front so an unusable precision is rejected before anything
         # is allocated. Note this is the *request*; the C++ side rounds it up to
         # the nearest compiled-in tier and records both.
         _precision = _validate_precision(precision)
+        _debug = _validate_debug(debug)
 
         # Matrix memory allocation
         if isinstance(pcm, np.ndarray) or isinstance(pcm, scipy.sparse.spmatrix):
@@ -246,7 +259,7 @@ cdef class RelayBpDecoderBase:
         ## initialise the decoder with default values
         self.bpd = new RelayBpDecoderCpp(self.pcm[0],self._error_channel,l,0,0,0,0.0,self._gamma_dist_interval,
                 self._memory_strengths_per_leg,PRODUCT_SUM,PARALLEL,1.0,1,self._serial_schedule_order,0,False,
-                SYNDROME, memory_seed, _precision)
+                SYNDROME, memory_seed, _precision, _debug)
 
         ## set the decoder parameters
         self.bp_method = bp_method
@@ -873,6 +886,100 @@ cdef class RelayBpDecoderBase:
         """
         return available_precisions()
 
+    @property
+    def debug(self) -> bool:
+        """
+        Whether the variable node log probability ratios are recorded after every
+        iteration of every leg. The recording is available through `llr_history`,
+        `llr_history_legs` and `llr_history_iterations` after each call to `decode`.
+        """
+        return self.bpd.debug
+
+    @debug.setter
+    def debug(self, value) -> None:
+        self.bpd.debug = _validate_debug(value)
+
+    @property
+    def llr_history(self) -> np.ndarray:
+        """
+        The variable node log probability ratios recorded during the most recent
+        decode, one row per iteration in the order they were computed, across all
+        legs that were run.
+
+        Only populated when `debug` is True; otherwise (or before any decode) this
+        is an empty array of shape (0, n). The history is reset at the start of each
+        decode. Values are narrowed to float64 whatever `precision` is in use.
+
+        Row k was recorded on leg `llr_history_legs[k]` at iteration
+        `llr_history_iterations[k]`. The final row of a converged leg is the
+        iteration on which it converged. Note that the reported `log_prob_ratios`
+        are those of the best leg, which need not be the last row here.
+
+        Returns:
+            np.ndarray: A float64 array of shape (number of recorded iterations, n).
+        """
+        cdef Py_ssize_t k, j
+        cdef Py_ssize_t rows = self.bpd.llr_history.size()
+        cdef Py_ssize_t n = self.n
+        out = np.empty((rows, n), dtype=np.float64)
+        cdef double[:, ::1] view = out
+        for k in range(rows):
+            for j in range(n):
+                view[k, j] = self.bpd.llr_history[k][j]
+        return out
+
+    @property
+    def llr_history_legs(self) -> np.ndarray:
+        """
+        The leg index (0-based) on which each row of `llr_history` was recorded.
+
+        Returns:
+            np.ndarray: An int array of length equal to the number of rows of `llr_history`.
+        """
+        cdef Py_ssize_t k
+        cdef Py_ssize_t rows = self.bpd.llr_history_leg.size()
+        out = np.empty(rows, dtype=np.int64)
+        for k in range(rows):
+            out[k] = self.bpd.llr_history_leg[k]
+        return out
+
+    @property
+    def llr_history_iterations(self) -> np.ndarray:
+        """
+        The iteration number within its leg (1-based, restarting on every leg) at
+        which each row of `llr_history` was recorded.
+
+        Returns:
+            np.ndarray: An int array of length equal to the number of rows of `llr_history`.
+        """
+        cdef Py_ssize_t k
+        cdef Py_ssize_t rows = self.bpd.llr_history_iteration.size()
+        out = np.empty(rows, dtype=np.int64)
+        for k in range(rows):
+            out[k] = self.bpd.llr_history_iteration[k]
+        return out
+
+    def llr_history_by_leg(self) -> List[np.ndarray]:
+        """
+        `llr_history` split into one array per leg that was run, so element l has
+        shape (iterations run on leg l, n).
+
+        Returns:
+            List[np.ndarray]: One float64 array per leg, in leg order.
+        """
+        history = self.llr_history
+        legs = self.llr_history_legs
+        if legs.size == 0:
+            return []
+        return [history[legs == leg] for leg in range(int(legs.max()) + 1)]
+
+    def clear_llr_history(self) -> None:
+        """
+        Discards the recorded llr history. It is also cleared automatically at the
+        start of every decode.
+        """
+        self.bpd.clear_llr_history()
+
 
 cdef class RelayBpDecoder(RelayBpDecoderBase):
     """
@@ -951,6 +1058,14 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
         exponent range, so the 11 bit tier is not a faithful model of IEEE half
         precision (and, being software floating point, it is slower than 24 or 53,
         not faster).
+    debug : bool, optional
+        If True, the variable node log probability ratios are recorded after every
+        iteration of every leg and can be read back through `llr_history` (with
+        `llr_history_legs` / `llr_history_iterations` or `llr_history_by_leg()`
+        to identify each row). By default False. The flag can also be toggled later
+        through the `debug` attribute. Recording costs memory proportional to the
+        total number of iterations times the block length, so leave it off for
+        large simulations.
     """
 
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
@@ -960,7 +1075,7 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
-                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, **kwargs):
+                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, debug: bool = False, **kwargs):
 
         for key in kwargs.keys():
             if key not in ["channel_probs"]:
@@ -978,7 +1093,7 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
                                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
-                                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, **kwargs):
+                                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, debug: bool = False, **kwargs):
 
         pass
 

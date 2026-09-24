@@ -37,7 +37,8 @@ cdef extern from "relay_bp.hpp" namespace "ldpc::relay":
                 bool random_serial_schedule,
                 BpInputType bp_input_type,
                 int memory_seed,
-                int precision) except +
+                int precision,
+                bool debug) except +
             int maximum_legs
             int maximum_solutions
             vector[vector[double]] memory_strengths_per_leg
@@ -55,6 +56,14 @@ cdef extern from "relay_bp.hpp" namespace "ldpc::relay":
 
             int solution_number
             int iterations
+
+            # Debugging: per-iteration snapshots of the variable node llrs, filled
+            # only while `debug` is true and cleared at the start of every decode.
+            bool debug
+            vector[vector[double]] llr_history
+            vector[int] llr_history_leg
+            vector[int] llr_history_iteration
+            void clear_llr_history()
 
 cdef class RelayBpDecoderBase:
     cdef BpSparse *pcm

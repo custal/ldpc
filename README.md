@@ -30,6 +30,7 @@ pip install -Ue .
 
 ## BLISS and BOOST Installation
 
+BLISS and BOOST are external libraries which must be installed to run autbp and relaybp
 BLISS is third part software required for finding graph automorphisms for use in autbp. 
 
 To install BLISS run (from the ldpc project directory):
@@ -39,7 +40,7 @@ To install BLISS run (from the ldpc project directory):
 BOOST is third party software used here to allow for arbitrary precision floating point numbers.
 
 To install BOOST run (once external has been made as above and from the ldpc project directory):
-git clone --branch boost-1.92.0 --depth 1 --recurse-submodules --shallow-submodules https://github.com/boostorg/boost.git external/boost
+    git clone --branch boost-1.92.0 --depth 1 --recurse-submodules --shallow-submodules https://github.com/boostorg/boost.git external/boost
 
 ## LDPCv1
 If your package requires LDPCv1, this can be installed from PyPi as follows:

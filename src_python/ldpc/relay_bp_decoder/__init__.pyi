@@ -393,6 +393,71 @@ class RelayBpDecoderBase:
         The precisions this decoder can be switched between, in mantissa bits.
         """
 
+    @property
+    def debug(self) -> bool:
+        """
+        Whether the variable node log probability ratios are recorded after every
+        iteration of every leg. The recording is available through `llr_history`,
+        `llr_history_legs` and `llr_history_iterations` after each call to `decode`.
+        """
+
+    @debug.setter
+    def debug(self, value) -> None: ...
+
+    @property
+    def llr_history(self) -> np.ndarray:
+        """
+        The variable node log probability ratios recorded during the most recent
+        decode, one row per iteration in the order they were computed, across all
+        legs that were run.
+
+        Only populated when `debug` is True; otherwise (or before any decode) this
+        is an empty array of shape (0, n). The history is reset at the start of each
+        decode. Values are narrowed to float64 whatever `precision` is in use.
+
+        Row k was recorded on leg `llr_history_legs[k]` at iteration
+        `llr_history_iterations[k]`. The final row of a converged leg is the
+        iteration on which it converged. Note that the reported `log_prob_ratios`
+        are those of the best leg, which need not be the last row here.
+
+        Returns:
+            np.ndarray: A float64 array of shape (number of recorded iterations, n).
+        """
+
+    @property
+    def llr_history_legs(self) -> np.ndarray:
+        """
+        The leg index (0-based) on which each row of `llr_history` was recorded.
+
+        Returns:
+            np.ndarray: An int array of length equal to the number of rows of `llr_history`.
+        """
+
+    @property
+    def llr_history_iterations(self) -> np.ndarray:
+        """
+        The iteration number within its leg (1-based, restarting on every leg) at
+        which each row of `llr_history` was recorded.
+
+        Returns:
+            np.ndarray: An int array of length equal to the number of rows of `llr_history`.
+        """
+
+    def llr_history_by_leg(self) -> List[np.ndarray]:
+        """
+        `llr_history` split into one array per leg that was run, so element l has
+        shape (iterations run on leg l, n).
+
+        Returns:
+            List[np.ndarray]: One float64 array per leg, in leg order.
+        """
+
+    def clear_llr_history(self) -> None:
+        """
+        Discards the recorded llr history. It is also cleared automatically at the
+        start of every decode.
+        """
+
 
 class RelayBpDecoder(RelayBpDecoderBase):
     """
@@ -471,6 +536,14 @@ class RelayBpDecoder(RelayBpDecoderBase):
         exponent range, so the 11 bit tier is not a faithful model of IEEE half
         precision (and, being software floating point, it is slower than 24 or 53,
         not faster).
+    debug : bool, optional
+        If True, the variable node log probability ratios are recorded after every
+        iteration of every leg and can be read back through `llr_history` (with
+        `llr_history_legs` / `llr_history_iterations` or `llr_history_by_leg()`
+        to identify each row). By default False. The flag can also be toggled later
+        through the `debug` attribute. Recording costs memory proportional to the
+        total number of iterations times the block length, so leave it off for
+        large simulations.
     """
 
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
@@ -480,7 +553,7 @@ class RelayBpDecoder(RelayBpDecoderBase):
                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
-                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, **kwargs): ...
+                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, debug: bool = False, **kwargs): ...
 
     def __init__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
                                  error_channel: Optional[Union[np.ndarray,List[float]]] = None, maximum_legs: Optional[int] = 1,
@@ -489,7 +562,7 @@ class RelayBpDecoder(RelayBpDecoderBase):
                                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
-                                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, **kwargs): ...
+                                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, debug: bool = False, **kwargs): ...
 
     def decode(self, input_vector: np.ndarray) -> np.ndarray:
         """

@@ -160,6 +160,14 @@ namespace ldpc::relay {
         std::vector<int> edge_row;               // edge id -> check index
         std::vector<BpEntry *> edge_entry;       // edge id -> the entry it mirrors
 
+        // Debugging: when `debug` is true, the variable node log probability ratios
+        // are snapshotted (narrowed to double) at the end of every iteration of every
+        // leg.
+        bool debug;
+        std::vector<std::vector<double>> llr_history;
+        std::vector<int> llr_history_leg;
+        std::vector<int> llr_history_iteration;
+
         RelayBpDecoder(
                 BpSparse &parity_check_matrix,
                 std::vector<double> channel_probabilities,
@@ -179,7 +187,8 @@ namespace ldpc::relay {
                 bool random_serial_schedule = false,
                 BpInputType bp_input_type = ldpc::bp::AUTO,
                 int memory_seed = -1, // seed for the per-leg memory strength RNG; -1 -> seed non-deterministically
-                int precision = DEFAULT_PRECISION // mantissa bits used for the messages; 53 == double == previous behaviour
+                int precision = DEFAULT_PRECISION, // mantissa bits used for the messages; 53 == double == previous behaviour
+                bool debug = false // record the variable node llrs every iteration into llr_history
                 ) :
                 BpDecoder(
                     parity_check_matrix,
@@ -196,7 +205,8 @@ namespace ldpc::relay {
                         iterations0(iterations0),
                         gamma0(gamma0),
                         gamma_dist_interval(std::move(gamma_dist_interval)),
-                        memory_strengths_per_leg(std::move(memory_strengths_per_leg)), memory_seed(memory_seed)
+                        memory_strengths_per_leg(std::move(memory_strengths_per_leg)), memory_seed(memory_seed),
+                        debug(debug)
         {
             this->solution_number = 0;
             this->iterations = 0;
@@ -249,6 +259,25 @@ namespace ldpc::relay {
             int resolved = resolve_precision(requested_precision);
             this->precision_request = requested_precision;
             this->precision = resolved;
+        }
+
+        void clear_llr_history() {
+            this->llr_history.clear();
+            this->llr_history_leg.clear();
+            this->llr_history_iteration.clear();
+        }
+
+        // Appends a double-precision snapshot of the working-precision llrs. Only
+        // called when debug is set, so it costs nothing otherwise.
+        template<typename T>
+        void record_llr(const std::vector<T> &llr, int leg, int iteration) {
+            std::vector<double> snapshot(this->bit_count);
+            for (int i = 0; i < this->bit_count; i++) {
+                snapshot[i] = static_cast<double>(llr[i]);
+            }
+            this->llr_history.push_back(std::move(snapshot));
+            this->llr_history_leg.push_back(leg);
+            this->llr_history_iteration.push_back(iteration);
         }
 
         // Indexes the non-zeros of the parity check matrix. Called once from the
@@ -361,6 +390,7 @@ namespace ldpc::relay {
             std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
             this->solution_number = 0;
             this->iterations = 0;
+            this->clear_llr_history();
 
             // Working-precision state, persisting across legs: llr in particular is
             // deliberately carried from one leg into the next.
@@ -383,6 +413,10 @@ namespace ldpc::relay {
                 this->initialise_log_domain_bp_relay<T>(leg, initial_llr, llr, bit_to_check);
                 int leg_max_iterations = (leg == 0) ? this->iterations0 : this->maximum_iterations;
                 std::vector<double> memory_strengths = this->generate_memory_strengths_for_leg(leg);
+
+                if (this->debug && leg==0) {
+                    this->record_llr<T>(llr, leg, 0);
+                }
 
                 //main interation loop
                 for (int it = 1; it <= leg_max_iterations; it++) {
@@ -501,6 +535,10 @@ namespace ldpc::relay {
                         }
                     }
 
+                    if (this->debug) {
+                        this->record_llr<T>(llr, leg, it);
+                    }
+
                     if (std::equal(candidate_syndrome.begin(), candidate_syndrome.end(), syndrome.begin())) {
                         this->converge = true;
                     }
@@ -544,6 +582,7 @@ namespace ldpc::relay {
                 //Return the lowest-weight converged solution found across all legs
                 this->decoding = best_decoding;
                 llr = best_log_prob_ratios;
+                this->converge = true;
             }
             //If no leg converged, this->decoding / llr already hold the
             //best-effort result from the final leg that was run.
@@ -559,6 +598,7 @@ namespace ldpc::relay {
                 std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
                 this->solution_number = 0;
                 this->iterations = 0;
+                this->clear_llr_history();
 
                 std::vector<T> initial_llr(this->bit_count, T(0));
                 std::vector<T> llr(this->bit_count, T(0));
@@ -578,6 +618,10 @@ namespace ldpc::relay {
                     this->initialise_log_domain_bp_relay<T>(leg, initial_llr, llr, bit_to_check);
                     int leg_max_iterations = (leg == 0) ? this->iterations0 : this->maximum_iterations;
                     std::vector<double> memory_strengths = this->generate_memory_strengths_for_leg(leg);
+
+                    if (this->debug && leg==0) {
+                        this->record_llr<T>(llr, leg, 0);
+                    }
 
                     for (int it = 1; it <= leg_max_iterations; it++) {
 
@@ -663,6 +707,10 @@ namespace ldpc::relay {
                                 bit_to_check[e] += temp;
                                 temp += check_to_bit[e];
                             }
+                        }
+
+                        if (this->debug) {
+                            this->record_llr<T>(llr, leg, it);
                         }
 
                         // compute the syndrome for the current candidate decoding solution
