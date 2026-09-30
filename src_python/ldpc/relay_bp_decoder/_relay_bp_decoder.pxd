@@ -3,6 +3,7 @@
 from libc.stdlib cimport malloc, calloc, free
 from libcpp cimport bool
 from libcpp.vector cimport vector
+from libcpp.pair cimport pair
 cimport numpy as np
 from ldpc.bp_decoder._bp_decoder cimport BpSparse, NULL_INT_VECTOR, BpMethod, BpInputType, BpSchedule, BpEntry, BpSparse, BpDecoderCpp
 ctypedef np.uint8_t uint8_t
@@ -63,7 +64,28 @@ cdef extern from "relay_bp.hpp" namespace "ldpc::relay":
             vector[vector[double]] llr_history
             vector[int] llr_history_leg
             vector[int] llr_history_iteration
+            vector[int] llr_history_total_iteration
             void clear_llr_history()
+
+            # Debugging: per-iteration snapshots of every message on every edge,
+            # filled only while `debug` is true, and only for the
+            # iterations (counted across all legs) selected through set_pcm_save_iterations.
+            # Each snapshot is indexed by edge id; edge e is (edge_row[e], edge_col[e]).
+            int edge_count
+            vector[int] edge_row
+            vector[int] edge_col
+            vector[pair[int, int]] edge_coordinates  # (row, column) of each edge
+            vector[vector[double]] bit_to_check_history
+            vector[vector[double]] check_to_bit_history
+            vector[int] pcm_history_iteration
+            vector[int] pcm_history_leg
+            vector[int] pcm_history_leg_iteration
+            bool pcm_save_all_iterations
+            vector[int] pcm_save_iterations
+            void set_pcm_save_iterations(vector[int] iterations) except +
+            void set_pcm_save_all_iterations()
+            void clear_pcm_history()
+            void clear_debug_history()
 
 cdef class RelayBpDecoderBase:
     cdef BpSparse *pcm

@@ -2,9 +2,10 @@
 # distutils: language = c++
 import numpy as np
 import scipy.sparse
-from typing import Optional, List, Union, Tuple
+from typing import Optional, List, Union, Tuple, Dict
 import warnings
 import ldpc.helpers.scipy_helpers
+from libc.string cimport memcpy
 from ldpc.bp_decoder._bp_decoder cimport (
     NULL_INT_VECTOR, PRODUCT_SUM, PARALLEL, SYNDROME, BpSparse, MINIMUM_SUM,
     BpInputType, SYNDROME, RECEIVED_VECTOR, AUTO, BpSchedule, PARALLEL, SERIAL, SERIAL_RELATIVE
@@ -94,6 +95,71 @@ cdef bint _validate_debug(value) except? -1:
     if value is True or value is False or isinstance(value, np.bool_):
         return True if value else False
     raise ValueError(f"'debug' must be a boolean, not {type(value)}.")
+
+
+def _validate_index_selection(value, str name):
+    """
+    Validation for `pcm_save_iterations`.
+
+    None means "everything" and is returned as None. Otherwise a single integer or
+    any iterable of integers (list, tuple, range, 1D integer array) is accepted and
+    returned as a sorted list of unique non-negative ints. An empty iterable is
+    allowed and means "nothing".
+    """
+    if value is None:
+        return None
+    # `bool` is the C++ bool in this module, so Python booleans are matched by identity.
+    if value is True or value is False or isinstance(value, np.bool_):
+        raise ValueError(f"'{name}' must be None or a collection of non-negative integers, not a boolean.")
+    if isinstance(value, (int, np.integer)):
+        value = [value]
+    elif isinstance(value, np.ndarray):
+        if value.ndim != 1:
+            raise ValueError(f"'{name}' must be one dimensional, not of shape {value.shape}.")
+        if value.size > 0 and not np.issubdtype(value.dtype, np.integer):
+            raise ValueError(f"'{name}' must contain integers, not {value.dtype}.")
+        value = value.tolist()
+    else:
+        try:
+            value = list(value)
+        except TypeError:
+            raise ValueError(
+                f"'{name}' must be None or a collection of non-negative integers, not {type(value)}."
+            )
+
+    out = set()
+    for v in value:
+        if v is True or v is False or not isinstance(v, (int, np.integer)):
+            raise ValueError(f"'{name}' must only contain integers, not {type(v)}.")
+        if v < 0:
+            raise ValueError(f"'{name}' must only contain non-negative integers, not {v}.")
+        out.add(int(v))
+    return sorted(out)
+
+
+cdef _history_to_array(vector[vector[double]]& history, Py_ssize_t width):
+    """
+    Copies a C++ history (one vector per snapshot, each of length `width`) into a
+    float64 numpy array of shape (snapshots, width).
+    """
+    cdef Py_ssize_t k
+    cdef Py_ssize_t rows = history.size()
+    out = np.empty((rows, width), dtype=np.float64)
+    if rows == 0 or width == 0:
+        return out
+    cdef double[:, ::1] view = out
+    for k in range(rows):
+        memcpy(&view[k, 0], history[k].data(), width * sizeof(double))
+    return out
+
+
+cdef _int_vector_to_array(vector[int]& values):
+    cdef Py_ssize_t k
+    cdef Py_ssize_t size = values.size()
+    out = np.empty(size, dtype=np.int64)
+    for k in range(size):
+        out[k] = values[k]
+    return out
 
 
 cdef BpSparse* Py2BpSparse(pcm):
@@ -206,6 +272,7 @@ cdef class RelayBpDecoderBase:
         if precision is None:
             precision = CPP_DEFAULT_PRECISION
         debug=kwargs.get("debug", False)
+        pcm_save_iterations=kwargs.get("pcm_save_iterations", None)
 
 
         cdef int i, j, nonzero_count
@@ -218,6 +285,7 @@ cdef class RelayBpDecoderBase:
         # the nearest compiled-in tier and records both.
         _precision = _validate_precision(precision)
         _debug = _validate_debug(debug)
+        _pcm_save_iterations = _validate_index_selection(pcm_save_iterations, "pcm_save_iterations")
 
         # Matrix memory allocation
         if isinstance(pcm, np.ndarray) or isinstance(pcm, scipy.sparse.spmatrix):
@@ -261,6 +329,8 @@ cdef class RelayBpDecoderBase:
                 self._memory_strengths_per_leg,PRODUCT_SUM,PARALLEL,1.0,1,self._serial_schedule_order,0,False,
                 SYNDROME, memory_seed, _precision, _debug)
 
+        ## which iterations have their edge messages recorded while debugging
+        self.pcm_save_iterations = _pcm_save_iterations
         ## set the decoder parameters
         self.bp_method = bp_method
         self.max_iter = max_iter
@@ -889,9 +959,15 @@ cdef class RelayBpDecoderBase:
     @property
     def debug(self) -> bool:
         """
-        Whether the variable node log probability ratios are recorded after every
-        iteration of every leg. The recording is available through `llr_history`,
-        `llr_history_legs` and `llr_history_iterations` after each call to `decode`.
+        Whether debugging information is recorded during each decode.
+
+        When True, the variable node log probability ratios are recorded after
+        every iteration of every leg (see `llr_history`, `llr_history_legs`,
+        `llr_history_iterations` and `llr_history_total_iterations`), and every
+        bit-to-check and check-to-bit message on every edge of the parity check
+        matrix is recorded for the iterations selected by `pcm_save_iterations`
+        (see `bit_to_check_history`, `check_to_bit_history`,
+        `pcm_history_iterations` and `pcm_history_dense()`).
         """
         return self.bpd.debug
 
@@ -959,6 +1035,20 @@ cdef class RelayBpDecoderBase:
             out[k] = self.bpd.llr_history_iteration[k]
         return out
 
+    @property
+    def llr_history_total_iterations(self) -> np.ndarray:
+        """
+        The iteration number counted across all legs (0 for the initial state,
+        then 1, 2, ... continuing from one leg into the next) at which each row of
+        `llr_history` was recorded. This is the numbering `pcm_save_iterations`
+        and `pcm_history_iterations` use, so it matches llr rows to edge message
+        snapshots.
+
+        Returns:
+            np.ndarray: An int array of length equal to the number of rows of `llr_history`.
+        """
+        return _int_vector_to_array(self.bpd.llr_history_total_iteration)
+
     def llr_history_by_leg(self) -> List[np.ndarray]:
         """
         `llr_history` split into one array per leg that was run, so element l has
@@ -979,6 +1069,211 @@ cdef class RelayBpDecoderBase:
         start of every decode.
         """
         self.bpd.clear_llr_history()
+
+    # ------------------------------------------------------------------
+    # Edge message (pcm) history
+    # ------------------------------------------------------------------
+
+    @property
+    def pcm_save_iterations(self) -> Optional[np.ndarray]:
+        """
+        The iterations on which the edge messages are recorded while `debug` is
+        True. None means every iteration.
+
+        Iterations are counted across all legs, as in the `iterations` attribute:
+        if leg 0 runs 12 iterations then the first iteration of leg 1 is 13, and so
+        on. Iteration 0 is the initial state of the decode (bit-to-check messages
+        equal to the priors, before any message passing). For example
+        ``range(1, 11)`` records the first 10 iterations of the decode, whichever
+        legs they fall in, and ``range(13, 21)`` would record the first 8 of leg 1
+        in the example above (provided leg 0 ran all 12).
+
+        Accepts None, a single integer, or any collection of non-negative integers
+        (list, tuple, range, 1D integer array). An empty collection records no
+        iterations, which is how to keep the llr history without any edge messages.
+        Iterations beyond those actually run are simply never reached.
+
+        This selection only affects the edge message history; the llr history is
+        always recorded in full when `debug` is True.
+        """
+        if self.bpd.pcm_save_all_iterations:
+            return None
+        return _int_vector_to_array(self.bpd.pcm_save_iterations)
+
+    @pcm_save_iterations.setter
+    def pcm_save_iterations(self, value) -> None:
+        selection = _validate_index_selection(value, "pcm_save_iterations")
+        if selection is None:
+            self.bpd.set_pcm_save_all_iterations()
+        else:
+            self.bpd.set_pcm_save_iterations(selection)
+
+    @property
+    def edge_count(self) -> int:
+        """
+        The number of non-zero entries of the parity check matrix, i.e. the number
+        of edges of the Tanner graph and the width of each recorded message snapshot.
+        """
+        return self.bpd.edge_count
+
+    @property
+    def edge_rows(self) -> np.ndarray:
+        """
+        The check (row) index of each edge, so column e of `bit_to_check_history`
+        and `check_to_bit_history` belongs to entry (edge_rows[e], edge_cols[e]) of
+        the parity check matrix. Edges are ordered row by row.
+        """
+        return _int_vector_to_array(self.bpd.edge_row)
+
+    @property
+    def edge_cols(self) -> np.ndarray:
+        """
+        The bit (column) index of each edge; see `edge_rows`.
+        """
+        return _int_vector_to_array(self.bpd.edge_col)
+
+    @property
+    def edge_coordinates(self) -> List[Tuple[int, int]]:
+        """
+        The (row, column) of each edge in the parity check matrix, as a list of
+        tuples in edge order: column e of `bit_to_check_history` /
+        `check_to_bit_history` is the message on edge ``edge_coordinates[e]``.
+        Equivalent to ``list(zip(edge_rows, edge_cols))``.
+
+        Returns:
+            List[Tuple[int, int]]: One (row, column) tuple per edge.
+        """
+        return self.bpd.edge_coordinates
+
+    @property
+    def bit_to_check_history(self) -> np.ndarray:
+        """
+        The bit-to-check messages on every edge, recorded during the most recent
+        decode for each selected iteration, in the order they were taken.
+
+        Only populated when `debug` is True; otherwise (or before any decode) this
+        is an empty array of shape (0, edge_count). The history is reset at the
+        start of each decode. Values are narrowed to float64 whatever `precision`
+        is in use.
+
+        Snapshot k was taken at iteration `pcm_history_iterations[k]` (counted
+        across all legs), which was iteration `pcm_history_leg_iterations[k]` of
+        leg `pcm_history_legs[k]`. Column e is the message on the edge
+        (`edge_rows[e]`, `edge_cols[e]`). Use `pcm_history_dense()` for the same
+        data laid out over the full (m, n) matrix.
+
+        What an iteration's snapshot holds:
+
+        * Parallel schedule: taken at the end of the iteration, so it contains the
+          check-to-bit messages computed on that iteration and the bit-to-check
+          messages computed from them (i.e. those that the next iteration consumes).
+          On the iteration where a leg converges the decoder stops before its
+          bit-to-check update; the snapshot still shows the completed update,
+          computed on a copy so decoding is unaffected.
+        * Serial schedule: taken after the full sweep over the bits, so each message
+          is the latest one sent along its edge during that sweep.
+        * Iteration 0: the initial state of the decode. Bit-to-check messages equal
+          the channel priors and check-to-bit messages are zero. The starts of
+          later legs are not recorded, as they have no iteration number of their
+          own (their bit-to-check messages are simply reset to the priors).
+
+        Each snapshot costs 16 * edge_count bytes (both message directions), so use
+        `pcm_save_iterations` to bound the memory used.
+
+        Returns:
+            np.ndarray: A float64 array of shape (number of snapshots, edge_count).
+        """
+        return _history_to_array(self.bpd.bit_to_check_history, self.bpd.edge_count)
+
+    @property
+    def check_to_bit_history(self) -> np.ndarray:
+        """
+        The check-to-bit messages on every edge, recorded alongside
+        `bit_to_check_history` (same rows, same columns, same caveats).
+
+        Returns:
+            np.ndarray: A float64 array of shape (number of snapshots, edge_count).
+        """
+        return _history_to_array(self.bpd.check_to_bit_history, self.bpd.edge_count)
+
+    @property
+    def pcm_history_iterations(self) -> np.ndarray:
+        """
+        The iteration, counted across all legs (0 for the initial state), at which
+        each snapshot of `bit_to_check_history` / `check_to_bit_history` was taken.
+        This is the numbering `pcm_save_iterations` selects by, and matches
+        `llr_history_total_iterations` (not `llr_history_iterations`, which
+        restarts on every leg).
+
+        Returns:
+            np.ndarray: An int array of length equal to the number of snapshots.
+        """
+        return _int_vector_to_array(self.bpd.pcm_history_iteration)
+
+    @property
+    def pcm_history_legs(self) -> np.ndarray:
+        """
+        For information: the leg (0-based) in which each snapshot fell.
+
+        Returns:
+            np.ndarray: An int array of length equal to the number of snapshots.
+        """
+        return _int_vector_to_array(self.bpd.pcm_history_leg)
+
+    @property
+    def pcm_history_leg_iterations(self) -> np.ndarray:
+        """
+        For information: the iteration within its leg (1-based, restarting on
+        every leg, 0 for the initial state) of each snapshot, i.e. the numbering
+        used by `llr_history_iterations`.
+
+        Returns:
+            np.ndarray: An int array of length equal to the number of snapshots.
+        """
+        return _int_vector_to_array(self.bpd.pcm_history_leg_iteration)
+
+    def pcm_history_dense(self, message: str = "bit_to_check", fill_value: float = np.nan) -> np.ndarray:
+        """
+        The recorded edge messages laid out over the full parity check matrix.
+
+        Entry [k, i, j] is the message on edge (i, j) in snapshot k. Positions where
+        the parity check matrix is zero hold `fill_value` (NaN by default, so they
+        cannot be mistaken for a genuine zero message).
+
+        Note that this is dense: it takes 8 * snapshots * m * n bytes, which can be
+        far more than the compact `bit_to_check_history` / `check_to_bit_history`.
+
+        Args:
+            message (str): 'bit_to_check' (or 'b2c') or 'check_to_bit' (or 'c2b').
+            fill_value (float): Value placed where the parity check matrix is zero.
+
+        Returns:
+            np.ndarray: A float64 array of shape (number of snapshots, m, n).
+        """
+        key = str(message).lower()
+        if key in ("bit_to_check", "b2c", "bit_to_check_msg"):
+            history = self.bit_to_check_history
+        elif key in ("check_to_bit", "c2b", "check_to_bit_msg"):
+            history = self.check_to_bit_history
+        else:
+            raise ValueError(f"'message' must be 'bit_to_check' or 'check_to_bit', not '{message}'.")
+        out = np.full((history.shape[0], self.m, self.n), fill_value, dtype=np.float64)
+        if history.shape[0] > 0 and history.shape[1] > 0:
+            out[:, self.edge_rows, self.edge_cols] = history
+        return out
+
+    def clear_pcm_history(self) -> None:
+        """
+        Discards the recorded edge message history. It is also cleared
+        automatically at the start of every decode.
+        """
+        self.bpd.clear_pcm_history()
+
+    def clear_debug_history(self) -> None:
+        """
+        Discards both the llr history and the edge message history.
+        """
+        self.bpd.clear_debug_history()
 
 
 cdef class RelayBpDecoder(RelayBpDecoderBase):
@@ -1066,6 +1361,22 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
         through the `debug` attribute. Recording costs memory proportional to the
         total number of iterations times the block length, so leave it off for
         large simulations.
+
+        With debug on, every bit-to-check and check-to-bit message on every edge of
+        the parity check matrix is also recorded, for the iterations selected by
+        `pcm_save_iterations`. Read it back through `bit_to_check_history` /
+        `check_to_bit_history` (one row per snapshot, one column per edge, with
+        `edge_rows` / `edge_cols` giving each edge's position and
+        `pcm_history_iterations` identifying each row), or through
+        `pcm_history_dense()` as (snapshots, m, n) arrays.
+    pcm_save_iterations : Optional[Union[int, List[int], range, np.ndarray]], optional
+        The iterations whose edge messages are recorded when `debug` is True,
+        counted across all legs as in the `iterations` attribute (if leg 0 runs 12
+        iterations, the first iteration of leg 1 is 13). Iteration 0 is the initial
+        state of the decode. By default None, which records every iteration. For
+        example ``range(1, 11)`` records the first 10 iterations of the decode and
+        ``[]`` records none. This does not affect the llr history, which is always
+        recorded in full.
     """
 
     def __cinit__(self, pcm: Union[np.ndarray, scipy.sparse.spmatrix], error_rate: Optional[float] = None,
@@ -1075,7 +1386,8 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
-                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, debug: bool = False, **kwargs):
+                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, debug: bool = False,
+                 pcm_save_iterations: Optional[Union[int, List[int], Tuple, range, np.ndarray]] = None, **kwargs):
 
         for key in kwargs.keys():
             if key not in ["channel_probs"]:
@@ -1093,7 +1405,8 @@ cdef class RelayBpDecoder(RelayBpDecoderBase):
                                  memory_strengths_per_leg: Optional[Union[np.ndarray, List, Tuple]] = None, max_iter: Optional[int] = 0, bp_method: Optional[str] = 'minimum_sum',
                                  ms_scaling_factor: Optional[Union[float,int]] = 1.0, schedule: Optional[str] = 'parallel', omp_thread_count: Optional[int] = 1,
                                  random_schedule_seed: Optional[int] = 0, serial_schedule_order: Optional[List[int]] = None, input_vector_type: str = "auto", random_serial_schedule: bool = False,
-                                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, debug: bool = False, **kwargs):
+                                 memory_seed: Optional[int] = -1, precision: Optional[int] = None, debug: bool = False,
+                 pcm_save_iterations: Optional[Union[int, List[int], Tuple, range, np.ndarray]] = None, **kwargs):
 
         pass
 

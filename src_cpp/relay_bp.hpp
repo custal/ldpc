@@ -158,6 +158,12 @@ namespace ldpc::relay {
         std::vector<std::vector<int>> row_edges; // check -> edge ids, in iterate_row order
         std::vector<std::vector<int>> col_edges; // bit   -> edge ids, in iterate_column order
         std::vector<int> edge_row;               // edge id -> check index
+        std::vector<int> edge_col;               // edge id -> bit index
+
+        // The (row, column) of each edge in the parity check matrix, in edge order,
+        // so column e of bit_to_check_history / check_to_bit_history is the message
+        // on edge edge_coordinates[e]. Filled by build_edge_index.
+        std::vector<std::pair<int, int>> edge_coordinates;
         std::vector<BpEntry *> edge_entry;       // edge id -> the entry it mirrors
 
         // Debugging: when `debug` is true, the variable node log probability ratios
@@ -166,7 +172,36 @@ namespace ldpc::relay {
         bool debug;
         std::vector<std::vector<double>> llr_history;
         std::vector<int> llr_history_leg;
-        std::vector<int> llr_history_iteration;
+        std::vector<int> llr_history_iteration;       // within the leg (restarts every leg)
+        std::vector<int> llr_history_total_iteration; // counted across all legs
+
+        // Debugging: when `debug` is true, every bit-to-check and check-to-bit message
+        // on every edge of the Tanner graph is also snapshotted (narrowed to double),
+        // but only on the iterations selected by `pcm_save_iterations`. The llr
+        // history above is unaffected by this selection.
+        //
+        // Iterations are counted across all legs, exactly like the `iterations`
+        // member: if leg 0 runs 12 iterations then leg 1's first iteration is 13.
+        // Iteration 0 is the initial state of the decode (leg 0, before any message
+        // passing). The initial states of later legs have no total iteration number
+        // of their own and are not recorded.
+        //
+        // Each snapshot is a vector of length edge_count, indexed by edge id, so the
+        // message on edge e lives at (edge_row[e], edge_col[e]) of the parity check
+        // matrix. Snapshot k was taken at total iteration pcm_history_iteration[k],
+        // which was iteration pcm_history_leg_iteration[k] of leg pcm_history_leg[k].
+        //
+        // Selection: when pcm_save_all_iterations is true every iteration is saved,
+        // otherwise only those in pcm_save_iterations (kept sorted and unique). Use
+        // the setters below rather than writing the vector directly so the
+        // sorted/unique invariant holds.
+        std::vector<std::vector<double>> bit_to_check_history;
+        std::vector<std::vector<double>> check_to_bit_history;
+        std::vector<int> pcm_history_iteration;     // counted across all legs
+        std::vector<int> pcm_history_leg;
+        std::vector<int> pcm_history_leg_iteration; // within the leg
+        bool pcm_save_all_iterations = true;
+        std::vector<int> pcm_save_iterations;
 
         RelayBpDecoder(
                 BpSparse &parity_check_matrix,
@@ -188,7 +223,7 @@ namespace ldpc::relay {
                 BpInputType bp_input_type = ldpc::bp::AUTO,
                 int memory_seed = -1, // seed for the per-leg memory strength RNG; -1 -> seed non-deterministically
                 int precision = DEFAULT_PRECISION, // mantissa bits used for the messages; 53 == double == previous behaviour
-                bool debug = false // record the variable node llrs every iteration into llr_history
+                bool debug = false // record the llrs every iteration into llr_history, and the edge messages into bit_to_check_history / check_to_bit_history for the iterations selected by set_pcm_save_iterations
                 ) :
                 BpDecoder(
                     parity_check_matrix,
@@ -265,12 +300,92 @@ namespace ldpc::relay {
             this->llr_history.clear();
             this->llr_history_leg.clear();
             this->llr_history_iteration.clear();
+            this->llr_history_total_iteration.clear();
+        }
+
+        void clear_pcm_history() {
+            this->bit_to_check_history.clear();
+            this->check_to_bit_history.clear();
+            this->pcm_history_iteration.clear();
+            this->pcm_history_leg.clear();
+            this->pcm_history_leg_iteration.clear();
+        }
+
+        void clear_debug_history() {
+            this->clear_llr_history();
+            this->clear_pcm_history();
+        }
+
+        // Sorts, de-duplicates and validates an iteration selection.
+        static std::vector<int> normalise_selection(std::vector<int> values, const char *name) {
+            for (int v: values) {
+                if (v < 0) {
+                    throw std::runtime_error(std::string(name) + " must only contain non-negative integers.");
+                }
+            }
+            std::sort(values.begin(), values.end());
+            values.erase(std::unique(values.begin(), values.end()), values.end());
+            return values;
+        }
+
+        // Save the messages only on these iterations, counted across all legs (0 is
+        // the initial state of the decode). An empty vector means none are saved.
+        void set_pcm_save_iterations(std::vector<int> iterations) {
+            this->pcm_save_iterations = normalise_selection(std::move(iterations), "pcm_save_iterations");
+            this->pcm_save_all_iterations = false;
+        }
+
+        void set_pcm_save_all_iterations() {
+            this->pcm_save_iterations.clear();
+            this->pcm_save_all_iterations = true;
+        }
+
+        // `total_iteration` is counted across all legs.
+        bool should_record_pcm(int total_iteration) const {
+            if (!this->debug) return false;
+            if (this->pcm_save_all_iterations) return true;
+            return std::binary_search(this->pcm_save_iterations.begin(), this->pcm_save_iterations.end(),
+                                      total_iteration);
+        }
+
+        // Appends a double-precision snapshot of every message on every edge. Only
+        // called when should_record_pcm() says so, so it costs nothing otherwise.
+        template<typename T>
+        void record_pcm(const std::vector<T> &bit_to_check, const std::vector<T> &check_to_bit,
+                        int total_iteration, int leg, int leg_iteration) {
+            std::vector<double> b2c(this->edge_count);
+            std::vector<double> c2b(this->edge_count);
+            for (int e = 0; e < this->edge_count; e++) {
+                b2c[e] = static_cast<double>(bit_to_check[e]);
+                c2b[e] = static_cast<double>(check_to_bit[e]);
+            }
+            this->bit_to_check_history.push_back(std::move(b2c));
+            this->check_to_bit_history.push_back(std::move(c2b));
+            this->pcm_history_iteration.push_back(total_iteration);
+            this->pcm_history_leg.push_back(leg);
+            this->pcm_history_leg_iteration.push_back(leg_iteration);
+        }
+
+        // Second half of the parallel-schedule bit-to-check update. When the llrs are
+        // computed, bit_to_check[e] is only left holding the prior plus the incoming
+        // check-to-bit messages that precede e in its column; this backward pass adds
+        // the ones that follow it, leaving the extrinsic message.
+        template<typename T>
+        void finalise_bit_to_check(std::vector<T> &bit_to_check, const std::vector<T> &check_to_bit) {
+            for (int i = 0; i < this->bit_count; i++) {
+                T temp = T(0);
+                for (auto rit = this->col_edges[i].rbegin(); rit != this->col_edges[i].rend(); ++rit) {
+                    const int e = *rit;
+                    bit_to_check[e] += temp;
+                    temp += check_to_bit[e];
+                }
+            }
         }
 
         // Appends a double-precision snapshot of the working-precision llrs. Only
         // called when debug is set, so it costs nothing otherwise.
         template<typename T>
-        void record_llr(const std::vector<T> &llr, int leg, int iteration) {
+        void record_llr(const std::vector<T> &llr, int leg, int iteration, int total_iteration) {
             std::vector<double> snapshot(this->bit_count);
             for (int i = 0; i < this->bit_count; i++) {
                 snapshot[i] = static_cast<double>(llr[i]);
@@ -278,6 +393,7 @@ namespace ldpc::relay {
             this->llr_history.push_back(std::move(snapshot));
             this->llr_history_leg.push_back(leg);
             this->llr_history_iteration.push_back(iteration);
+            this->llr_history_total_iteration.push_back(total_iteration);
         }
 
         // Indexes the non-zeros of the parity check matrix. Called once from the
@@ -288,6 +404,8 @@ namespace ldpc::relay {
             this->row_edges.assign(this->check_count, std::vector<int>());
             this->col_edges.assign(this->bit_count, std::vector<int>());
             this->edge_row.clear();
+            this->edge_col.clear();
+            this->edge_coordinates.clear();
             this->edge_entry.clear();
 
             this->edge_count = 0;
@@ -296,6 +414,8 @@ namespace ldpc::relay {
                     e.bit_to_check_msg = static_cast<double>(this->edge_count);
                     this->row_edges[i].push_back(this->edge_count);
                     this->edge_row.push_back(i);
+                    this->edge_col.push_back(e.col_index);
+                    this->edge_coordinates.emplace_back(i, e.col_index);
                     this->edge_entry.push_back(&e);
                     this->edge_count++;
                 }
@@ -390,7 +510,7 @@ namespace ldpc::relay {
             std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
             this->solution_number = 0;
             this->iterations = 0;
-            this->clear_llr_history();
+            this->clear_debug_history();
 
             // Working-precision state, persisting across legs: llr in particular is
             // deliberately carried from one leg into the next.
@@ -415,7 +535,15 @@ namespace ldpc::relay {
                 std::vector<double> memory_strengths = this->generate_memory_strengths_for_leg(leg);
 
                 if (this->debug && leg==0) {
-                    this->record_llr<T>(llr, leg, 0);
+                    this->record_llr<T>(llr, leg, 0, 0);
+                }
+
+                // Total iteration 0, the initial state of the decode: bit_to_check holds
+                // the priors and check_to_bit is still zero. The starts of later legs
+                // share their total iteration number with the previous leg's last
+                // iteration, so they are not recorded.
+                if (leg == 0 && this->should_record_pcm(0)) {
+                    this->record_pcm<T>(bit_to_check, check_to_bit, 0, leg, 0);
                 }
 
                 //main interation loop
@@ -536,7 +664,7 @@ namespace ldpc::relay {
                     }
 
                     if (this->debug) {
-                        this->record_llr<T>(llr, leg, it);
+                        this->record_llr<T>(llr, leg, it, this->iterations + it);
                     }
 
                     if (std::equal(candidate_syndrome.begin(), candidate_syndrome.end(), syndrome.begin())) {
@@ -545,19 +673,31 @@ namespace ldpc::relay {
 
                     leg_iterations = it;
 
+                    // this->iterations holds the iterations of the legs already completed.
+                    const int total_it = this->iterations + it;
+                    const bool record_pcm_now = this->should_record_pcm(total_it);
+
                     if (this->converge) {
+                        // The decoder stops before completing the bit-to-check update,
+                        // so complete it on a copy for the snapshot. The decoder's own
+                        // state (and so write_back_to_base) is left exactly as before.
+                        if (record_pcm_now) {
+                            std::vector<T> finished_bit_to_check = bit_to_check;
+                            this->finalise_bit_to_check<T>(finished_bit_to_check, check_to_bit);
+                            this->record_pcm<T>(finished_bit_to_check, check_to_bit, total_it, leg, it);
+                        }
                         this->solution_number += 1;
                         break;
                     }
 
                     //compute bit to check update
-                    for (int i = 0; i < bit_count; i++) {
-                        T temp = T(0);
-                        for (auto rit = this->col_edges[i].rbegin(); rit != this->col_edges[i].rend(); ++rit) {
-                            const int e = *rit;
-                            bit_to_check[e] += temp;
-                            temp += check_to_bit[e];
-                        }
+                    this->finalise_bit_to_check<T>(bit_to_check, check_to_bit);
+
+                    // Snapshot after the bit-to-check update so that both message sets
+                    // are complete: check_to_bit as computed on this iteration and
+                    // bit_to_check as they will be consumed on the next.
+                    if (record_pcm_now) {
+                        this->record_pcm<T>(bit_to_check, check_to_bit, total_it, leg, it);
                     }
                 }
 
@@ -598,7 +738,7 @@ namespace ldpc::relay {
                 std::fill(this->log_prob_ratios.begin(), this->log_prob_ratios.end(), 0);
                 this->solution_number = 0;
                 this->iterations = 0;
-                this->clear_llr_history();
+                this->clear_debug_history();
 
                 std::vector<T> initial_llr(this->bit_count, T(0));
                 std::vector<T> llr(this->bit_count, T(0));
@@ -620,7 +760,12 @@ namespace ldpc::relay {
                     std::vector<double> memory_strengths = this->generate_memory_strengths_for_leg(leg);
 
                     if (this->debug && leg==0) {
-                        this->record_llr<T>(llr, leg, 0);
+                        this->record_llr<T>(llr, leg, 0, 0);
+                    }
+
+                    // See the parallel schedule for what iteration 0 holds.
+                    if (leg == 0 && this->should_record_pcm(0)) {
+                        this->record_pcm<T>(bit_to_check, check_to_bit, 0, leg, 0);
                     }
 
                     for (int it = 1; it <= leg_max_iterations; it++) {
@@ -710,7 +855,14 @@ namespace ldpc::relay {
                         }
 
                         if (this->debug) {
-                            this->record_llr<T>(llr, leg, it);
+                            this->record_llr<T>(llr, leg, it, this->iterations + it);
+                        }
+
+                        // Every bit has finished its own update by the end of the sweep,
+                        // so all of the messages are complete here.
+                        const int total_it = this->iterations + it; // earlier legs + this one
+                        if (this->should_record_pcm(total_it)) {
+                            this->record_pcm<T>(bit_to_check, check_to_bit, total_it, leg, it);
                         }
 
                         // compute the syndrome for the current candidate decoding solution
